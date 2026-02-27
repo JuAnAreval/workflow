@@ -1,0 +1,10 @@
+export const URL_BASE = "http://localhost:3000/api/v1"
+export const URL_LOGIN = `${URL_BASE}/auth/email/login`
+export const URL_PROJECT = `${URL_BASE}/projects`
+export const URL_REFRESH = `${URL_BASE}/auth/refresh`
+export const URL_TASK = `${URL_BASE}/tasks`
+export const URL_WORKFLOW = `${URL_BASE}/workflows`
+export const URL_WORKFLOWNODES = `${URL_BASE}/workflow-nodes`
+export const URL_WORKFLOWEDGE = `${URL_BASE}/workflow-edges`
+export const URL_WORKFLOW_ASSIGNMENTS = `${URL_BASE}/workflow-assignments`
+export const URL_USER = `${URL_BASE}/users`

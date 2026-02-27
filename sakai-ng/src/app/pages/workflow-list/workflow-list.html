@@ -1,0 +1,233 @@
+<section class="workflow-list-shell">
+  <section class="workflow-catalog-view">
+    <div class="catalog-panel">
+      <header class="catalog-head">
+        <div class="catalog-copy">
+          <p class="topbar-kicker">Automation Studio</p>
+          <h1>Workflows guardados</h1>
+          <p>Selecciona un workflow para entrar al editor o crea uno nuevo.</p>
+          <div class="catalog-overview">
+            <span class="catalog-chip">Total: {{ availableWorkflows.length }}</span>
+            @if (isLoading) {
+              <span class="catalog-chip catalog-chip-loading">Actualizando...</span>
+            }
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="catalog-btn catalog-btn-primary"
+          [disabled]="isLoading"
+          (click)="promptCreateWorkflow()"
+        >
+          <i class="pi pi-plus"></i>
+          Crear workflow
+        </button>
+      </header>
+
+      <div class="catalog-table-wrap">
+        <table class="catalog-table">
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Creado</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            @if (availableWorkflows.length) {
+              @for (workflow of availableWorkflows; track workflow.id) {
+                <tr class="catalog-row">
+                  <td class="catalog-name-cell">
+                    <span>{{ workflow.name }}</span>
+                    <small>{{ workflow.id }}</small>
+                  </td>
+                  <td class="catalog-created-cell">{{ formatWorkflowCreatedAt(workflow.createdAt) }}</td>
+                  <td class="catalog-actions-cell">
+                    <button
+                      type="button"
+                      class="catalog-btn catalog-btn-muted"
+                      [disabled]="isLoading || isSaving"
+                      (click)="editWorkflow(workflow)"
+                    >
+                      <i class="pi pi-pencil"></i>
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      class="catalog-btn catalog-btn-muted"
+                      [disabled]="isLoading || isSaving"
+                      (click)="duplicateWorkflow(workflow)"
+                    >
+                      <i class="pi pi-copy"></i>
+                      Duplicar
+                    </button>
+                    <button
+                      type="button"
+                      class="catalog-btn catalog-btn-json"
+                      [disabled]="isLoading || isSaving"
+                      (click)="openSavedJsonDialog(workflow)"
+                    >
+                      <i class="pi pi-database"></i>
+                      Ver JSON guardados
+                    </button>
+                    <button
+                      type="button"
+                      class="catalog-btn catalog-btn-primary"
+                      [disabled]="isLoading || isSaving"
+                      (click)="openWorkflow(workflow)"
+                    >
+                      <i class="pi pi-arrow-right"></i>
+                      Ingresar
+                    </button>
+                    <button
+                      type="button"
+                      class="catalog-btn catalog-btn-danger"
+                      [disabled]="isLoading || isSaving"
+                      (click)="deleteWorkflow(workflow)"
+                    >
+                      <i class="pi pi-trash"></i>
+                      Eliminar
+                    </button>
+                  </td>
+                </tr>
+              }
+            } @else {
+              <tr>
+                <td colspan="3" class="catalog-empty">
+                  <div class="catalog-empty-state">
+                    <i class="pi pi-inbox"></i>
+                    <span>Aun no tienes workflows creados.</span>
+                  </div>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+
+      @if (statusMessage) {
+        <p class="catalog-status">{{ statusMessage }}</p>
+      }
+    </div>
+  </section>
+</section>
+
+<p-dialog
+  [(visible)]="workflowNameDialogVisible"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [dismissableMask]="!isLoading && !isSaving"
+  [closable]="!isLoading && !isSaving"
+  [style]="{ width: '32rem', maxWidth: '96vw' }"
+  (onHide)="closeWorkflowNameDialog()"
+>
+  <ng-template pTemplate="header">
+    <span class="workflow-name-modal-title">
+      {{ workflowNameDialogMode === 'create' ? 'Crear workflow' : 'Renombrar workflow' }}
+    </span>
+  </ng-template>
+
+  <div class="workflow-name-modal-body">
+    <label for="workflow-name-input" class="workflow-name-modal-label">
+      Nombre del workflow
+    </label>
+    <input
+      pInputText
+      id="workflow-name-input"
+      type="text"
+      class="w-full"
+      [(ngModel)]="workflowNameDraft"
+      [maxlength]="120"
+      (keydown.enter)="submitWorkflowNameDialog()"
+    />
+    <small class="workflow-name-modal-help">
+      Usa un nombre claro para identificar tu automatizacion.
+    </small>
+  </div>
+
+  <ng-template pTemplate="footer">
+    <p-button
+      label="Cancelar"
+      severity="secondary"
+      [text]="true"
+      [disabled]="isLoading || isSaving"
+      (onClick)="closeWorkflowNameDialog()"
+    ></p-button>
+    <p-button
+      [label]="workflowNameDialogMode === 'create' ? 'Crear workflow' : 'Guardar nombre'"
+      [loading]="isLoading || isSaving"
+      (onClick)="submitWorkflowNameDialog()"
+    ></p-button>
+  </ng-template>
+</p-dialog>
+
+<p-dialog
+  [(visible)]="savedJsonDialogVisible"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [dismissableMask]="!isLoadingSavedJsons"
+  [closable]="!isLoadingSavedJsons"
+  [style]="{ width: '72rem', maxWidth: '98vw' }"
+  (onHide)="closeSavedJsonDialog()"
+>
+  <ng-template pTemplate="header">
+    <span class="workflow-name-modal-title">
+      {{ savedJsonDialogTitle || 'JSON guardados' }}
+    </span>
+  </ng-template>
+
+  <div class="saved-json-modal-body">
+    @if (isLoadingSavedJsons) {
+      <div class="saved-json-state">
+        <i class="pi pi-spin pi-spinner"></i>
+        <span>Cargando JSON guardados...</span>
+      </div>
+    } @else if (savedJsonErrorMessage) {
+      <div class="saved-json-state saved-json-error">
+        <i class="pi pi-times-circle"></i>
+        <span>{{ savedJsonErrorMessage }}</span>
+      </div>
+    } @else if (!savedJsonRows.length) {
+      <div class="saved-json-state">
+        <i class="pi pi-inbox"></i>
+        <span>No hay JSON guardados en este workflow todavia.</span>
+      </div>
+    } @else {
+      <p class="saved-json-meta">
+        Workflow: {{ savedJsonWorkflowId }}
+      </p>
+
+      <section class="saved-json-grid">
+        @for (row of savedJsonRows; track row.id) {
+          <article class="saved-json-card">
+            <header class="saved-json-card-head">
+              <div>
+                <p class="saved-json-source">{{ resolveSavedJsonSourceLabel(row) }}</p>
+                <h3>{{ row.nodeLabel || row.sourceNodeType || 'Nodo sin nombre' }}</h3>
+              </div>
+              <span>{{ formatSavedJsonCreatedAt(row.createdAt) }}</span>
+            </header>
+
+            <p class="saved-json-node-type">
+              Tipo de nodo: {{ row.sourceNodeType || '-' }}
+            </p>
+            <pre>{{ resolveSavedJsonPayload(row) }}</pre>
+          </article>
+        }
+      </section>
+    }
+  </div>
+
+  <ng-template pTemplate="footer">
+    <p-button
+      label="Cerrar"
+      [disabled]="isLoadingSavedJsons"
+      (onClick)="closeSavedJsonDialog()"
+    ></p-button>
+  </ng-template>
+</p-dialog>
+
+<p-confirmDialog></p-confirmDialog>

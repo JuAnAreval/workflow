@@ -1,0 +1,119 @@
+<div class="p-4">
+    <h2 class="text-2xl font-bold mb-4 text-surface-900 dark:text-surface-0">Gestion de Proyectos</h2>
+
+    <p-card header="Crear Nuevo Proyecto" class="mb-6">
+        <form #projectForm="ngForm" (ngSubmit)="createProject(projectForm)" class="flex flex-col gap-4">
+            <div class="flex flex-col gap-2">
+                <label for="name" class="text-surface-700 dark:text-surface-300">Nombre del Proyecto</label>
+                <input
+                    pInputText
+                    id="name"
+                    type="text"
+                    [(ngModel)]="newProject.name"
+                    name="name"
+                    required
+                    placeholder="Ingresa el nombre del proyecto"
+                    class="w-full"
+                />
+            </div>
+            <div class="flex flex-col gap-2">
+                <label for="description" class="text-surface-700 dark:text-surface-300">Descripcion</label>
+                <textarea
+                    pTextarea
+                    id="description"
+                    [(ngModel)]="newProject.description"
+                    name="description"
+                    rows="3"
+                    placeholder="Ingresa una descripcion opcional"
+                    class="w-full"
+                ></textarea>
+            </div>
+            <p-button type="submit" label="Crear Proyecto"></p-button>
+        </form>
+    </p-card>
+
+    <p-card header="Proyectos Existentes">
+        <div class="flex justify-end mb-3" *ngIf="projects.length > 0">
+            <p-button
+                label="Eliminar todos"
+                icon="pi pi-trash"
+                severity="danger"
+                [outlined]="true"
+                [loading]="isDeletingAllProjects"
+                [disabled]="loading || isDeletingAllProjects || !!editingProject"
+                (click)="deleteAllProjects()"
+            ></p-button>
+        </div>
+
+        <table class="w-full border-collapse border border-surface-200 dark:border-surface-700">
+            <thead>
+                <tr class="bg-surface-100 dark:bg-surface-800">
+                    <th class="border border-surface-200 dark:border-surface-700 p-2 text-left text-surface-900 dark:text-surface-0">Nombre</th>
+                    <th class="border border-surface-200 dark:border-surface-700 p-2 text-left text-surface-900 dark:text-surface-0">Descripcion</th>
+                    <th class="border border-surface-200 dark:border-surface-700 p-2 text-left text-surface-900 dark:text-surface-0">Dueno</th>
+                    <th class="border border-surface-200 dark:border-surface-700 p-2 text-left text-surface-900 dark:text-surface-0">Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr *ngFor="let project of projects">
+                    <td *ngIf="editingProject?.id !== project.id" class="border border-surface-200 dark:border-surface-700 p-2 text-surface-900 dark:text-surface-0">
+                        {{ project.name }}
+                    </td>
+                    <td *ngIf="editingProject?.id !== project.id" class="border border-surface-200 dark:border-surface-700 p-2 text-surface-600 dark:text-surface-400">
+                        {{ project.description }}
+                    </td>
+                    <td *ngIf="editingProject?.id !== project.id" class="border border-surface-200 dark:border-surface-700 p-2 text-surface-600 dark:text-surface-400">
+                        {{ getProjectOwnerLabel(project) }}
+                    </td>
+                    <td *ngIf="editingProject?.id !== project.id" class="border border-surface-200 dark:border-surface-700 p-2">
+                        <div class="flex gap-2">
+                            <p-button label="Editar" icon="pi pi-pencil" size="small" (click)="editProject(project)"></p-button>
+                            <p-button label="Eliminar" icon="pi pi-trash" size="small" severity="danger" (click)="deleteProject(project)"></p-button>
+                            <p-button label="Agregar Tarea" icon="pi pi-plus" size="small" severity="success" (click)="navigateToTasks(project)"></p-button>
+                        </div>
+                    </td>
+                    <td *ngIf="editingProject?.id === project.id" colspan="4" class="border border-surface-200 dark:border-surface-700 p-2">
+                        <div class="flex flex-col gap-4">
+                            <div class="flex flex-col gap-2">
+                                <label class="text-surface-700 dark:text-surface-300">Nombre del Proyecto</label>
+                                <input pInputText type="text" [(ngModel)]="editingProject!.name" required class="w-full" />
+                            </div>
+                            <div class="flex flex-col gap-2">
+                                <label class="text-surface-700 dark:text-surface-300">Descripcion</label>
+                                <textarea pTextarea [(ngModel)]="editingProject!.description" rows="3" class="w-full"></textarea>
+                            </div>
+                            <div class="flex flex-col gap-2" *ngIf="isAdmin">
+                                <label class="text-surface-700 dark:text-surface-300">Dueno del proyecto</label>
+                                <p-select
+                                    [(ngModel)]="editingProject!.ownerId"
+                                    [options]="ownerOptions"
+                                    optionLabel="label"
+                                    optionValue="id"
+                                    placeholder="Selecciona un dueno"
+                                    class="w-full"
+                                ></p-select>
+                                <small *ngIf="ownerLoadError" class="text-red-500">{{ ownerLoadError }}</small>
+                            </div>
+                            <div class="flex gap-2">
+                                <p-button label="Guardar" icon="pi pi-check" (click)="saveEdit()"></p-button>
+                                <p-button label="Cancelar" icon="pi pi-times" severity="secondary" (click)="cancelEdit()"></p-button>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+
+        <p *ngIf="projects.length === 0" class="text-surface-500 dark:text-surface-400 mt-4">
+            No hay proyectos aun.
+        </p>
+
+        <div class="flex justify-center gap-2 mt-4" *ngIf="projects.length > 0">
+            <p-button label="Anterior" icon="pi pi-chevron-left" (click)="prevPage()" [disabled]="currentPage === 1 || loading"></p-button>
+            <span class="flex items-center text-surface-700 dark:text-surface-300">Pagina {{ currentPage }}</span>
+            <p-button label="Siguiente" icon="pi pi-chevron-right" (click)="nextPage()" [disabled]="!hasNextPage || loading"></p-button>
+        </div>
+    </p-card>
+</div>
+
+<p-confirmDialog></p-confirmDialog>

@@ -1,0 +1,324 @@
+<section class="workflow-inbox-page">
+  <header class="inbox-header">
+    <div>
+      <p class="header-kicker">Workflow</p>
+      <h1>Inbox de pendientes</h1>
+      <p class="header-subtitle">
+        Los usuarios envian borradores y los administradores aprueban o rechazan con
+        retroalimentacion.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      @if (isAdmin) {
+        <div class="mode-switch">
+          <button
+            type="button"
+            class="mode-btn"
+            [class.active]="inboxMode === 'mine'"
+            [disabled]="isLoading || isSubmitting"
+            (click)="switchMode('mine')"
+          >
+            Mis pendientes
+          </button>
+          <button
+            type="button"
+            class="mode-btn"
+            [class.active]="inboxMode === 'admin'"
+            [disabled]="isLoading || isSubmitting"
+            (click)="switchMode('admin')"
+          >
+            Revision admin
+          </button>
+        </div>
+      }
+
+      <button type="button" class="refresh-btn" [disabled]="isLoading" (click)="loadAssignments()">
+        Recargar
+      </button>
+    </div>
+  </header>
+
+  <div class="inbox-filters">
+    <label>
+      <span>Estado</span>
+      <select
+        [value]="statusFilter"
+        [disabled]="isLoading || isSubmitting"
+        (change)="onStatusFilterChange($any($event.target).value)"
+      >
+        @if (inboxMode === 'admin') {
+          <option value="pending">Pendiente de revision</option>
+          <option value="completed">Completado</option>
+          <option value="draft">Borrador</option>
+          <option value="cancelled">Cancelado</option>
+          <option value="all">Todos</option>
+        } @else {
+          <option value="draft">Borrador</option>
+          <option value="pending">Pendiente de revision</option>
+          <option value="completed">Completado</option>
+          <option value="cancelled">Cancelado</option>
+          <option value="all">Todos</option>
+        }
+      </select>
+    </label>
+  </div>
+
+  @if (statusMessage) {
+    <p class="status-line">{{ statusMessage }}</p>
+  }
+
+  <div class="inbox-layout">
+    <aside class="pending-list">
+      <h2>{{ inboxMode === 'admin' ? 'Pendientes para revisar' : 'Mis pendientes' }}</h2>
+      @if (isLoading) {
+        <p class="empty-state">Cargando pendientes...</p>
+      } @else if (!assignments.length) {
+        <p class="empty-state">No hay pendientes en este estado.</p>
+      } @else {
+        @for (assignment of assignments; track assignment.id) {
+          <button
+            type="button"
+            class="pending-item"
+            [class.active]="selectedAssignment?.id === assignment.id"
+            (click)="selectAssignment(assignment)"
+          >
+            <div class="pending-item-head">
+              <span class="pending-type">{{ getEntityLabel(assignment.entityType) }}</span>
+              <span class="pending-status-pill">{{ getStatusLabel(assignment.status) }}</span>
+            </div>
+            <strong>{{ getAssignmentTitle(assignment) }}</strong>
+            <small>{{ assignment.createdAt | date: 'medium' }}</small>
+          </button>
+        }
+      }
+    </aside>
+
+    <section class="pending-detail">
+      @if (!selectedAssignment) {
+        <p class="empty-state">Selecciona un pendiente para ver su detalle.</p>
+      } @else {
+        <h2>{{ inboxMode === 'admin' ? 'Revisar' : 'Editar' }} {{ getEntityLabel(selectedAssignment.entityType) }}</h2>
+
+        <div class="detail-meta">
+          <span>Estado: {{ getStatusLabel(selectedAssignment.status) }}</span>
+          @if (selectedAssignment.submittedAt) {
+            <span>Enviado: {{ selectedAssignment.submittedAt | date: 'medium' }}</span>
+          }
+          @if (selectedAssignment.reviewedAt) {
+            <span>Revisado: {{ selectedAssignment.reviewedAt | date: 'medium' }}</span>
+          }
+        </div>
+
+        @if (selectedAssignment.reviewFeedback) {
+          <div class="feedback-note">
+            <strong>Retroalimentacion admin</strong>
+            <p>{{ selectedAssignment.reviewFeedback }}</p>
+          </div>
+        }
+
+        @if (selectedAssignment.entityType === 'form') {
+          @for (field of formCustomFields; track field.name + '-' + $index) {
+            <label>
+              <span>{{ field.name }}</span>
+              <input
+                type="text"
+                [readonly]="!canEditSelectedAssignment()"
+                [value]="field.value"
+                (input)="field.value = $any($event.target).value ?? ''"
+                [placeholder]="'Valor para ' + field.name"
+              />
+            </label>
+          }
+        }
+
+        @if (selectedAssignment.entityType === 'project') {
+          <label>
+            <span>Nombre del proyecto</span>
+            <input
+              type="text"
+              [readonly]="!canEditSelectedAssignment()"
+              [value]="formName"
+              (input)="formName = $any($event.target).value ?? ''"
+              placeholder="Nombre del proyecto"
+            />
+          </label>
+
+          <label>
+            <span>Descripcion</span>
+            <textarea
+              rows="5"
+              [readonly]="!canEditSelectedAssignment()"
+              [value]="formDescription"
+              (input)="formDescription = $any($event.target).value ?? ''"
+              placeholder="Descripcion opcional"
+            ></textarea>
+          </label>
+        }
+
+        @if (selectedAssignment.entityType === 'task') {
+          <label>
+            <span>Proyecto</span>
+            <select
+              [disabled]="!canEditSelectedAssignment() || isLoadingProjects"
+              [value]="formProjectId"
+              (change)="formProjectId = $any($event.target).value ?? ''"
+            >
+              <option value="">Selecciona un proyecto</option>
+              @for (project of projects; track project.id) {
+                <option [value]="project.id">{{ project.name }} ({{ project.id }})</option>
+              }
+            </select>
+          </label>
+
+          @if (!projects.length && !isLoadingProjects) {
+            <label>
+              <span>ID proyecto (manual)</span>
+              <input
+                type="text"
+                [readonly]="!canEditSelectedAssignment()"
+                [value]="formProjectId"
+                (input)="formProjectId = $any($event.target).value ?? ''"
+                placeholder="UUID del proyecto"
+              />
+            </label>
+          }
+
+          @if (projectsLoadError) {
+            <p class="field-hint">{{ projectsLoadError }}</p>
+          }
+
+          <label>
+            <span>Nombre de la tarea</span>
+            <input
+              type="text"
+              [readonly]="!canEditSelectedAssignment()"
+              [value]="formName"
+              (input)="formName = $any($event.target).value ?? ''"
+              placeholder="Nombre de la tarea"
+            />
+          </label>
+
+          <label>
+            <span>Descripcion</span>
+            <textarea
+              rows="5"
+              [readonly]="!canEditSelectedAssignment()"
+              [value]="formDescription"
+              (input)="formDescription = $any($event.target).value ?? ''"
+              placeholder="Descripcion de la tarea"
+            ></textarea>
+          </label>
+
+          <label>
+            <span>Estado</span>
+            <select
+              [disabled]="!canEditSelectedAssignment()"
+              [value]="formEstado"
+              (change)="formEstado = $any($event.target).value ?? 'pendiente'"
+            >
+              <option value="pendiente">Pendiente</option>
+              <option value="en progreso">En progreso</option>
+              <option value="completada">Completada</option>
+            </select>
+          </label>
+        }
+
+        @if (selectedAssignment.entityType === 'user') {
+          <label>
+            <span>Nombre</span>
+            <input
+              type="text"
+              [readonly]="!canEditSelectedAssignment()"
+              [value]="formFirstName"
+              (input)="formFirstName = $any($event.target).value ?? ''"
+              placeholder="Nombre"
+            />
+          </label>
+
+          <label>
+            <span>Apellido</span>
+            <input
+              type="text"
+              [readonly]="!canEditSelectedAssignment()"
+              [value]="formLastName"
+              (input)="formLastName = $any($event.target).value ?? ''"
+              placeholder="Apellido"
+            />
+          </label>
+
+          <label>
+            <span>Email</span>
+            <input
+              type="email"
+              [readonly]="!canEditSelectedAssignment()"
+              [value]="formEmail"
+              (input)="formEmail = $any($event.target).value ?? ''"
+              placeholder="usuario@dominio.com"
+            />
+          </label>
+
+          @if (canEditSelectedAssignment()) {
+            <label>
+              <span>Password (opcional)</span>
+              <input
+                type="password"
+                [value]="formPassword"
+                (input)="formPassword = $any($event.target).value ?? ''"
+                placeholder="Minimo 6 caracteres"
+              />
+            </label>
+          }
+        }
+
+        @if (isMineMode()) {
+          <div class="detail-actions">
+            <button
+              type="button"
+              class="submit-btn"
+              [disabled]="!canEditSelectedAssignment() || isSubmitting || isLoading"
+              (click)="submitSelectedAssignment()"
+            >
+              {{
+                isSubmitting
+                  ? 'Enviando...'
+                  : selectedAssignment.entityType === 'form'
+                    ? 'Completar formulario'
+                    : 'Enviar a revision'
+              }}
+            </button>
+          </div>
+        } @else {
+          <label>
+            <span>Retroalimentacion (requerida al rechazar)</span>
+            <textarea
+              rows="4"
+              [value]="reviewFeedbackDraft"
+              (input)="reviewFeedbackDraft = $any($event.target).value ?? ''"
+              placeholder="Explica ajustes solicitados o comentario de aprobacion."
+            ></textarea>
+          </label>
+
+          <div class="detail-actions">
+            <button
+              type="button"
+              class="reject-btn"
+              [disabled]="selectedAssignment.status !== 'pending' || isSubmitting || isLoading"
+              (click)="reviewSelectedAssignment('reject')"
+            >
+              {{ isSubmitting ? 'Procesando...' : 'Rechazar' }}
+            </button>
+            <button
+              type="button"
+              class="approve-btn"
+              [disabled]="selectedAssignment.status !== 'pending' || isSubmitting || isLoading"
+              (click)="reviewSelectedAssignment('approve')"
+            >
+              {{ isSubmitting ? 'Procesando...' : 'Aprobar y crear' }}
+            </button>
+          </div>
+        }
+      }
+    </section>
+  </div>
+</section>
