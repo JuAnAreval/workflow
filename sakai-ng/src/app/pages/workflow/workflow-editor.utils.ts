@@ -1,12 +1,15 @@
 import {
   ConditionOperator,
   ConditionOperatorOption,
+  WorkflowScheduleMode,
+  WorkflowScheduleRecurringType,
   WorkflowTriggerEvent,
 } from './workflow.types';
 import { WORKFLOW_EDITOR_DEFAULTS } from './workflow-editor.defaults';
 import { parseConditionInputValue, parseConfigObject } from './workflow-json.utils';
 import {
   isManualTriggerType,
+  isScheduleTriggerType,
   isTriggerType,
   isWebhookTriggerType,
 } from './workflow-trigger.utils';
@@ -17,6 +20,15 @@ type TriggerToggles = {
   triggerOnDeleted: boolean;
   triggerWebhookToken: string;
   triggerWebhookResponse: string;
+  triggerScheduleMode: WorkflowScheduleMode;
+  triggerScheduleEnabled: boolean;
+  triggerScheduleTimezone: string;
+  triggerScheduleOnceAt: string;
+  triggerScheduleRecurringType: WorkflowScheduleRecurringType;
+  triggerScheduleMinute: number;
+  triggerScheduleTime: string;
+  triggerScheduleWeekdays: number[];
+  triggerScheduleDayOfMonth: number;
 };
 
 type AssignmentFields = {
@@ -103,6 +115,24 @@ export function composeNodeConfigToSave(
     if (isManualTriggerType(input.editNodeType)) {
       return {
         config: JSON.stringify({ events: ['manual'] }),
+        errorMessage: null,
+      };
+    }
+
+    if (isScheduleTriggerType(input.editNodeType)) {
+      const scheduleConfig = composeScheduleTriggerConfig(input);
+      if (!scheduleConfig.ok) {
+        return {
+          config: null,
+          errorMessage: scheduleConfig.errorMessage,
+        };
+      }
+
+      return {
+        config: JSON.stringify({
+          events: ['schedule'],
+          schedule: scheduleConfig.value,
+        }),
         errorMessage: null,
       };
     }
@@ -377,6 +407,30 @@ export function resolveVisualDraftPatch(
         triggerOnDeleted: false,
         triggerWebhookToken: '',
         triggerWebhookResponse: '',
+        triggerScheduleMode: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleMode,
+        triggerScheduleEnabled: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleEnabled,
+        triggerScheduleTimezone: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleTimezone,
+        triggerScheduleOnceAt: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleOnceAt,
+        triggerScheduleRecurringType:
+          WORKFLOW_EDITOR_DEFAULTS.triggerScheduleRecurringType,
+        triggerScheduleMinute: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleMinute,
+        triggerScheduleTime: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleTime,
+        triggerScheduleWeekdays: [
+          ...WORKFLOW_EDITOR_DEFAULTS.triggerScheduleWeekdays,
+        ],
+        triggerScheduleDayOfMonth:
+          WORKFLOW_EDITOR_DEFAULTS.triggerScheduleDayOfMonth,
+      };
+    }
+
+    if (isScheduleTriggerType(nodeType)) {
+      return {
+        triggerOnCreated: false,
+        triggerOnUpdated: false,
+        triggerOnDeleted: false,
+        triggerWebhookToken: '',
+        triggerWebhookResponse: '',
+        ...resolveSchedulePatchFromConfig(config),
       };
     }
 
@@ -390,6 +444,19 @@ export function resolveVisualDraftPatch(
           config['response'] ?? {},
           '{\n  "event": "created"\n}',
         ),
+        triggerScheduleMode: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleMode,
+        triggerScheduleEnabled: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleEnabled,
+        triggerScheduleTimezone: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleTimezone,
+        triggerScheduleOnceAt: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleOnceAt,
+        triggerScheduleRecurringType:
+          WORKFLOW_EDITOR_DEFAULTS.triggerScheduleRecurringType,
+        triggerScheduleMinute: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleMinute,
+        triggerScheduleTime: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleTime,
+        triggerScheduleWeekdays: [
+          ...WORKFLOW_EDITOR_DEFAULTS.triggerScheduleWeekdays,
+        ],
+        triggerScheduleDayOfMonth:
+          WORKFLOW_EDITOR_DEFAULTS.triggerScheduleDayOfMonth,
       };
     }
 
@@ -414,6 +481,19 @@ export function resolveVisualDraftPatch(
       triggerOnDeleted,
       triggerWebhookToken: '',
       triggerWebhookResponse: '',
+      triggerScheduleMode: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleMode,
+      triggerScheduleEnabled: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleEnabled,
+      triggerScheduleTimezone: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleTimezone,
+      triggerScheduleOnceAt: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleOnceAt,
+      triggerScheduleRecurringType:
+        WORKFLOW_EDITOR_DEFAULTS.triggerScheduleRecurringType,
+      triggerScheduleMinute: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleMinute,
+      triggerScheduleTime: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleTime,
+      triggerScheduleWeekdays: [
+        ...WORKFLOW_EDITOR_DEFAULTS.triggerScheduleWeekdays,
+      ],
+      triggerScheduleDayOfMonth:
+        WORKFLOW_EDITOR_DEFAULTS.triggerScheduleDayOfMonth,
     };
   }
 
@@ -910,4 +990,350 @@ function readWebhookTokenFromConfig(config: Record<string, unknown>): string {
   }
 
   return raw.trim();
+}
+
+function composeScheduleTriggerConfig(input: ComposeNodeConfigInput): {
+  ok: boolean;
+  value: Record<string, unknown> | null;
+  errorMessage: string | null;
+} {
+  const timezone = normalizeScheduleTimezone(input.triggerScheduleTimezone);
+  if (!timezone) {
+    return {
+      ok: false,
+      value: null,
+      errorMessage:
+        'Debes indicar una zona horaria valida para el trigger programado (ej: America/Bogota).',
+    };
+  }
+
+  const mode = normalizeScheduleMode(input.triggerScheduleMode);
+  const enabled = Boolean(input.triggerScheduleEnabled);
+  if (mode === 'once') {
+    const onceAt = normalizeScheduleDateTime(input.triggerScheduleOnceAt);
+    if (!onceAt) {
+      return {
+        ok: false,
+        value: null,
+        errorMessage:
+          'La fecha y hora fija debe tener formato YYYY-MM-DD HH:mm o YYYY-MM-DD HH:mm:ss.',
+      };
+    }
+
+    return {
+      ok: true,
+      value: {
+        mode: 'once',
+        enabled,
+        timezone,
+        onceAt,
+      },
+      errorMessage: null,
+    };
+  }
+
+  const recurringType = normalizeScheduleRecurringType(
+    input.triggerScheduleRecurringType,
+  );
+  const recurring: Record<string, unknown> = {
+    type: recurringType,
+  };
+
+  if (recurringType === 'hourly') {
+    recurring['minute'] = normalizeScheduleMinute(input.triggerScheduleMinute);
+  } else {
+    recurring['time'] = normalizeScheduleTime(input.triggerScheduleTime);
+    if (recurringType === 'weekly') {
+      const weekdays = normalizeScheduleWeekdays(
+        input.triggerScheduleWeekdays,
+      );
+      if (!weekdays.length) {
+        return {
+          ok: false,
+          value: null,
+          errorMessage:
+            'Debes seleccionar al menos un dia de la semana para la recurrencia semanal.',
+        };
+      }
+
+      recurring['weekdays'] = weekdays;
+    }
+    if (recurringType === 'monthly') {
+      recurring['dayOfMonth'] = normalizeScheduleDayOfMonth(
+        input.triggerScheduleDayOfMonth,
+      );
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      mode: 'recurring',
+      enabled,
+      timezone,
+      recurring,
+    },
+    errorMessage: null,
+  };
+}
+
+function resolveSchedulePatchFromConfig(
+  config: Record<string, unknown>,
+): VisualDraftPatch {
+  const defaults = WORKFLOW_EDITOR_DEFAULTS;
+  const patch: VisualDraftPatch = {
+    triggerScheduleMode: defaults.triggerScheduleMode,
+    triggerScheduleEnabled: defaults.triggerScheduleEnabled,
+    triggerScheduleTimezone: defaults.triggerScheduleTimezone,
+    triggerScheduleOnceAt: defaults.triggerScheduleOnceAt,
+    triggerScheduleRecurringType: defaults.triggerScheduleRecurringType,
+    triggerScheduleMinute: defaults.triggerScheduleMinute,
+    triggerScheduleTime: defaults.triggerScheduleTime,
+    triggerScheduleWeekdays: [...defaults.triggerScheduleWeekdays],
+    triggerScheduleDayOfMonth: defaults.triggerScheduleDayOfMonth,
+  };
+
+  const schedule = config['schedule'];
+  if (!isPlainObject(schedule)) {
+    return patch;
+  }
+
+  patch.triggerScheduleMode = normalizeScheduleMode(schedule['mode']);
+  patch.triggerScheduleEnabled =
+    typeof schedule['enabled'] === 'boolean'
+      ? schedule['enabled']
+      : defaults.triggerScheduleEnabled;
+
+  const timezoneRaw = schedule['timezone'];
+  const normalizedTimezone =
+    typeof timezoneRaw === 'string'
+      ? normalizeScheduleTimezone(timezoneRaw)
+      : null;
+  patch.triggerScheduleTimezone =
+    normalizedTimezone ?? defaults.triggerScheduleTimezone;
+
+  const onceAtRaw = schedule['onceAt'];
+  if (typeof onceAtRaw === 'string') {
+    const normalizedOnceAt = normalizeScheduleDateTime(onceAtRaw);
+    if (normalizedOnceAt) {
+      patch.triggerScheduleOnceAt = normalizedOnceAt;
+    }
+  }
+
+  const recurring = schedule['recurring'];
+  if (!isPlainObject(recurring)) {
+    return patch;
+  }
+
+  patch.triggerScheduleRecurringType = normalizeScheduleRecurringType(
+    recurring['type'],
+  );
+  patch.triggerScheduleMinute = normalizeScheduleMinute(recurring['minute']);
+  patch.triggerScheduleTime = normalizeScheduleTime(
+    typeof recurring['time'] === 'string'
+      ? recurring['time']
+      : defaults.triggerScheduleTime,
+  );
+  patch.triggerScheduleWeekdays = normalizeScheduleWeekdays(
+    recurring['weekdays'],
+  );
+  patch.triggerScheduleDayOfMonth = normalizeScheduleDayOfMonth(
+    recurring['dayOfMonth'],
+  );
+
+  return patch;
+}
+
+function normalizeScheduleMode(value: unknown): WorkflowScheduleMode {
+  if (typeof value === 'string' && value.trim().toLowerCase() === 'recurring') {
+    return 'recurring';
+  }
+  return 'once';
+}
+
+function normalizeScheduleRecurringType(
+  value: unknown,
+): WorkflowScheduleRecurringType {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (
+      normalized === 'hourly' ||
+      normalized === 'daily' ||
+      normalized === 'weekly' ||
+      normalized === 'monthly'
+    ) {
+      return normalized;
+    }
+  }
+  return 'daily';
+}
+
+function normalizeScheduleMinute(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  const normalized = Math.trunc(parsed);
+  if (normalized < 0) {
+    return 0;
+  }
+  if (normalized > 59) {
+    return 59;
+  }
+  return normalized;
+}
+
+function normalizeScheduleDayOfMonth(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+  const normalized = Math.trunc(parsed);
+  if (normalized < 1) {
+    return 1;
+  }
+  if (normalized > 31) {
+    return 31;
+  }
+  return normalized;
+}
+
+function normalizeScheduleTime(valueRaw: string): string {
+  const trimmed = valueRaw.trim();
+  const match = /^(\d{2}):(\d{2})$/.exec(trimmed);
+  if (!match) {
+    return '09:00';
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    return '09:00';
+  }
+
+  const hh = String(hours).padStart(2, '0');
+  const mm = String(minutes).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function normalizeScheduleWeekdays(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    return [...WORKFLOW_EDITOR_DEFAULTS.triggerScheduleWeekdays];
+  }
+
+  const normalized = Array.from(
+    new Set(
+      value
+        .map((entry) => Number(entry))
+        .filter((entry) => Number.isInteger(entry))
+        .map((entry) => {
+          if (entry === 7) {
+            return 0;
+          }
+          return entry;
+        })
+        .filter((entry) => entry >= 0 && entry <= 6),
+    ),
+  ).sort((a, b) => a - b);
+
+  if (!normalized.length) {
+    return [...WORKFLOW_EDITOR_DEFAULTS.triggerScheduleWeekdays];
+  }
+
+  return normalized;
+}
+
+function normalizeScheduleTimezone(valueRaw: string): string | null {
+  const trimmed = valueRaw.trim();
+  const fallback = WORKFLOW_EDITOR_DEFAULTS.triggerScheduleTimezone;
+  const candidate = trimmed || fallback;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format(new Date());
+    return candidate;
+  } catch {
+    if (!trimmed) {
+      return fallback;
+    }
+    return null;
+  }
+}
+
+function normalizeScheduleDateTime(valueRaw: string): string | null {
+  const normalized = valueRaw.trim().replace(' ', 'T');
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(normalized);
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? '0');
+
+  if (!isValidDateTimeParts(year, month, day, hour, minute, second)) {
+    return null;
+  }
+
+  const yyyy = String(year).padStart(4, '0');
+  const mm = String(month).padStart(2, '0');
+  const dd = String(day).padStart(2, '0');
+  const hh = String(hour).padStart(2, '0');
+  const mi = String(minute).padStart(2, '0');
+  const ss = String(second).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
+}
+
+function isValidDateTimeParts(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+): boolean {
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    !Number.isInteger(second)
+  ) {
+    return false;
+  }
+
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59 ||
+    second < 0 ||
+    second > 59
+  ) {
+    return false;
+  }
+
+  const probe = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  return (
+    probe.getUTCFullYear() === year &&
+    probe.getUTCMonth() + 1 === month &&
+    probe.getUTCDate() === day &&
+    probe.getUTCHours() === hour &&
+    probe.getUTCMinutes() === minute &&
+    probe.getUTCSeconds() === second
+  );
 }

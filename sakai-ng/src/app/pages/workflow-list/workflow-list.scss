@@ -54,6 +54,13 @@
   border-bottom: 1px solid var(--wf-border);
 }
 
+.catalog-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+}
+
 .topbar-kicker {
   margin: 0;
   color: #6f8eb1;

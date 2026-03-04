@@ -52,6 +52,13 @@ export const WORKFLOW_CYTOSCAPE_STYLE: cytoscape.StylesheetJson = [
     },
   },
   {
+    selector: 'node[type = "trigger_schedule_event"]',
+    style: {
+      'background-color': '#fefbf3',
+      'border-color': '#ebd6ad',
+    },
+  },
+  {
     selector: 'node[kind = "action"]',
     style: {
       'background-color': '#f7f9ff',

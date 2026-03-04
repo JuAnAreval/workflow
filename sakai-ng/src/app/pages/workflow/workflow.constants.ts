@@ -15,6 +15,15 @@ export const WORKFLOW_NODE_TEMPLATES: ReadonlyArray<NodeTemplate> = [
     config: '{"events":["manual"]}',
   },
   {
+    id: 'trigger-schedule-event',
+    label: 'Programado',
+    description: 'Se activa por fecha fija o de forma recurrente.',
+    type: 'trigger_schedule_event',
+    kind: 'trigger',
+    config:
+      '{"events":["schedule"],"schedule":{"mode":"once","enabled":true,"timezone":"America/Bogota","onceAt":"2026-12-31T23:59:59"}}',
+  },
+  {
     id: 'trigger-webhook-event',
     label: 'Webhook',
     description: 'Se activa cuando recibe una peticion POST en su URL unica.',

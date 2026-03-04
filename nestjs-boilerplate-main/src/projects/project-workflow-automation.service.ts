@@ -25,8 +25,15 @@ type WorkflowEventType =
   | 'updated'
   | 'deleted'
   | 'manual'
-  | 'webhook';
-type WorkflowEntityType = 'project' | 'task' | 'user' | 'manual' | 'webhook';
+  | 'webhook'
+  | 'schedule';
+type WorkflowEntityType =
+  | 'project'
+  | 'task'
+  | 'user'
+  | 'manual'
+  | 'webhook'
+  | 'schedule';
 export type WorkflowWebhookExecutionPayload = {
   method: string;
   headers: Record<string, unknown>;
@@ -38,6 +45,13 @@ export type WorkflowWebhookExecutionPayload = {
 type WorkflowWebhookContext = WorkflowWebhookExecutionPayload & {
   token: string;
 };
+type WorkflowScheduleContext = {
+  workflowNodeId: string;
+  mode: 'once' | 'recurring';
+  timezone: string;
+  scheduledFor: string;
+  triggeredAt: string;
+};
 type WorkflowJsonByNode = Record<string, Record<string, unknown>>;
 type WorkflowJsonBySource = Record<WorkflowSavedJsonSourceType, WorkflowJsonByNode>;
 type ConditionContext = {
@@ -48,6 +62,7 @@ type ConditionContext = {
   user?: User;
   actorUser?: User;
   webhook?: WorkflowWebhookContext;
+  schedule?: WorkflowScheduleContext;
   form?: Record<string, unknown>;
   forms?: Record<string, Record<string, unknown>>;
   workflowJsonBySource?: WorkflowJsonBySource;
@@ -62,6 +77,7 @@ export class ProjectWorkflowAutomationService {
   private readonly logger = new Logger(ProjectWorkflowAutomationService.name);
   private readonly legacyProjectCreatedTriggerType = 'trigger_project_created';
   private readonly webhookTriggerType = 'trigger_webhook_event';
+  private readonly scheduleTriggerType = 'trigger_schedule_event';
   private readonly webhookTokenConfigKey = 'webhookToken';
   private readonly triggerTypeByEntity: Readonly<Record<WorkflowEntityType, string>> = {
     project: 'trigger_project_event',
@@ -69,6 +85,7 @@ export class ProjectWorkflowAutomationService {
     user: 'trigger_user_event',
     manual: 'trigger_manual_event',
     webhook: 'trigger_webhook_event',
+    schedule: 'trigger_schedule_event',
   };
   private readonly createProjectActionType = 'action_create_project';
   private readonly createTaskActionType = 'action_create_task';
@@ -267,6 +284,53 @@ export class ProjectWorkflowAutomationService {
     };
   }
 
+  async runScheduledWorkflowTrigger(input: {
+    workflowId: string;
+    workflowNodeId: string;
+    mode: 'once' | 'recurring';
+    timezone: string;
+    scheduledFor: string;
+    triggeredAt?: Date;
+  }): Promise<WorkflowExecutionResult> {
+    const workflowId = input.workflowId.trim();
+    const workflowNodeId = input.workflowNodeId.trim();
+    if (!workflowId || !workflowNodeId) {
+      return {
+        pausedFormAssignments: [],
+      };
+    }
+
+    const workflow = await this.workflowRepository.findById(workflowId);
+    if (!workflow) {
+      this.logger.warn(
+        `No se encontro workflow ${workflowId} para trigger programado ${workflowNodeId}.`,
+      );
+      return {
+        pausedFormAssignments: [],
+      };
+    }
+
+    const ownerUserId = workflow.user?.id;
+    const ownerUser =
+      ownerUserId !== null && ownerUserId !== undefined
+        ? await this.userRepository.findById(ownerUserId)
+        : null;
+
+    return this.executeWorkflow(workflow, {
+      event: 'schedule',
+      entityType: 'schedule',
+      actorUser: ownerUser ?? undefined,
+      user: ownerUser ?? undefined,
+      schedule: {
+        workflowNodeId,
+        mode: input.mode,
+        timezone: input.timezone,
+        scheduledFor: input.scheduledFor,
+        triggeredAt: (input.triggeredAt ?? new Date()).toISOString(),
+      },
+    });
+  }
+
   async resumeFromCompletedFormAssignment(
     assignment: WorkflowAssignmentView,
   ): Promise<WorkflowExecutionResult> {
@@ -432,10 +496,16 @@ export class ProjectWorkflowAutomationService {
       };
     }
 
+    const scheduleTriggerNodeId =
+      context.entityType === 'schedule'
+        ? context.schedule?.workflowNodeId?.trim() ?? ''
+        : '';
+
     const triggerNodeIds = nodes
       .filter((node) =>
         this.isNodeTriggeredByEvent(node, context.entityType, context.event),
       )
+      .filter((node) => !scheduleTriggerNodeId || node.id === scheduleTriggerNodeId)
       .map((node) => node.id);
     if (!triggerNodeIds.length) {
       return {
@@ -1071,6 +1141,9 @@ export class ProjectWorkflowAutomationService {
     if (entityType === 'webhook') {
       return 'webhook';
     }
+    if (entityType === 'schedule') {
+      return 'schedule';
+    }
 
     return 'created';
   }
@@ -1090,7 +1163,8 @@ export class ProjectWorkflowAutomationService {
           eventItem === 'updated' ||
           eventItem === 'deleted' ||
           eventItem === 'manual' ||
-          eventItem === 'webhook',
+          eventItem === 'webhook' ||
+          eventItem === 'schedule',
       );
 
     return Array.from(new Set(normalized));
@@ -2229,6 +2303,11 @@ export class ProjectWorkflowAutomationService {
       webhookHeaders: context.webhook?.headers ?? null,
       webhookQuery: context.webhook?.query ?? null,
       webhookBody: context.webhook?.body ?? null,
+      scheduleNodeId: context.schedule?.workflowNodeId ?? null,
+      scheduleMode: context.schedule?.mode ?? null,
+      scheduleTimezone: context.schedule?.timezone ?? null,
+      scheduleScheduledFor: context.schedule?.scheduledFor ?? null,
+      scheduleTriggeredAt: context.schedule?.triggeredAt ?? null,
     };
   }
 
@@ -2340,6 +2419,36 @@ export class ProjectWorkflowAutomationService {
         }
       : undefined;
 
+    const scheduleNodeId = this.readConfigString(contextData, 'scheduleNodeId');
+    const scheduleMode =
+      this.readConfigString(contextData, 'scheduleMode') === 'once'
+        ? 'once'
+        : this.readConfigString(contextData, 'scheduleMode') === 'recurring'
+          ? 'recurring'
+          : null;
+    const scheduleTimezone = this.readConfigString(contextData, 'scheduleTimezone');
+    const scheduleScheduledFor = this.readConfigString(
+      contextData,
+      'scheduleScheduledFor',
+    );
+    const scheduleTriggeredAt = this.readConfigString(
+      contextData,
+      'scheduleTriggeredAt',
+    );
+    const scheduleContext: WorkflowScheduleContext | undefined =
+      scheduleNodeId && scheduleMode && scheduleTimezone && scheduleScheduledFor
+        ? {
+            workflowNodeId: scheduleNodeId,
+            mode: scheduleMode,
+            timezone: scheduleTimezone,
+            scheduledFor: scheduleScheduledFor,
+            triggeredAt:
+              scheduleTriggeredAt ??
+              this.readConfigString(contextData, 'createdAt') ??
+              new Date().toISOString(),
+          }
+        : undefined;
+
     const project = projectFromContext ?? taskFromContext?.project;
 
     return {
@@ -2350,6 +2459,7 @@ export class ProjectWorkflowAutomationService {
       user: userFromContext ?? undefined,
       actorUser: actorUser ?? undefined,
       webhook: webhookContext,
+      schedule: scheduleContext,
     };
   }
 
@@ -2361,7 +2471,8 @@ export class ProjectWorkflowAutomationService {
         normalized === 'updated' ||
         normalized === 'deleted' ||
         normalized === 'manual' ||
-        normalized === 'webhook'
+        normalized === 'webhook' ||
+        normalized === 'schedule'
       ) {
         return normalized;
       }
@@ -2378,7 +2489,8 @@ export class ProjectWorkflowAutomationService {
         normalized === 'task' ||
         normalized === 'user' ||
         normalized === 'manual' ||
-        normalized === 'webhook'
+        normalized === 'webhook' ||
+        normalized === 'schedule'
       ) {
         return normalized;
       }
@@ -2394,6 +2506,7 @@ export class ProjectWorkflowAutomationService {
       context.user?.email ??
       context.user?.firstName ??
       context.webhook?.token ??
+      context.schedule?.workflowNodeId ??
       context.entityType
     );
   }

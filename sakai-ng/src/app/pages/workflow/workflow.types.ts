@@ -2,14 +2,27 @@ export type SelectionType = 'node' | 'edge' | null;
 export type NodeKind = 'trigger' | 'action' | 'decision' | 'success';
 export type RightMenuMode = 'add' | 'edit';
 export type WorkflowTriggerEvent = 'created' | 'updated' | 'deleted';
+export type WorkflowScheduleMode = 'once' | 'recurring';
+export type WorkflowScheduleRecurringType =
+  | 'hourly'
+  | 'daily'
+  | 'weekly'
+  | 'monthly';
 export type TriggerNodeType =
   | 'trigger_project_event'
   | 'trigger_project_created'
   | 'trigger_task_event'
   | 'trigger_user_event'
   | 'trigger_manual_event'
-  | 'trigger_webhook_event';
-export type TriggerEntity = 'project' | 'task' | 'user' | 'manual' | 'webhook';
+  | 'trigger_webhook_event'
+  | 'trigger_schedule_event';
+export type TriggerEntity =
+  | 'project'
+  | 'task'
+  | 'user'
+  | 'manual'
+  | 'webhook'
+  | 'schedule';
 export type ConditionOperator =
   | 'contains'
   | '=='

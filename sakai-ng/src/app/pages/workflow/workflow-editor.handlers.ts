@@ -13,6 +13,10 @@ import {
   removePrevTokenAtIndex,
   resolveHttpTestPayloadFromConfig,
 } from './workflow-runtime.utils';
+import {
+  readValueByVariableTargetFieldValue,
+  writeValueByVariableTargetFieldHandler,
+} from './workflow-variable-picker.handlers';
 
 export function removeTokenByFieldHandler(
   ctx: any,
@@ -35,9 +39,17 @@ export function removeTokenByFieldHandler(
     return;
   }
 
-  const currentValue = ctx.readValueByVariableTargetField(field);
+  const currentValue =
+    typeof ctx.readValueByVariableTargetField === 'function'
+      ? String(ctx.readValueByVariableTargetField(field) ?? '')
+      : readValueByVariableTargetFieldValue(ctx, field);
   const nextValue = removePrevTokenAtIndex(currentValue, tokenIndex);
-  ctx.writeValueByVariableTargetField(field, nextValue);
+  if (typeof ctx.writeValueByVariableTargetField === 'function') {
+    ctx.writeValueByVariableTargetField(field, nextValue);
+    return;
+  }
+
+  writeValueByVariableTargetFieldHandler(ctx, field, nextValue);
 }
 
 export function getFormFieldVariableTokenPreviewHandler(

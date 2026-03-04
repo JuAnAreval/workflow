@@ -17,6 +17,7 @@ import {
 } from './workflow.types';
 import {
   isManualTriggerType,
+  isScheduleTriggerType,
   isWebhookTriggerType,
   isTriggerType,
   normalizeTriggerType,
@@ -153,6 +154,15 @@ import {
   onNodeConfigInputHandler,
   onNodeLabelInputHandler,
   onNormalizedInputHandler,
+  onScheduleDayOfMonthInputHandler,
+  onScheduleEnabledToggleHandler,
+  onScheduleMinuteInputHandler,
+  onScheduleModeChangeHandler,
+  onScheduleOnceAtInputHandler,
+  onScheduleRecurringTypeChangeHandler,
+  onScheduleTimeInputHandler,
+  onScheduleTimezoneInputHandler,
+  onScheduleWeekdayToggleHandler,
   onTaskEstadoChangeHandler,
   onTemplateSearchInputHandler,
   onTriggerToggleHandler,
@@ -426,6 +436,48 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
     onWebhookResponseInputHandler(this, event);
   }
 
+  onScheduleModeChange(event: Event): void {
+    onScheduleModeChangeHandler(this, event);
+  }
+
+  onScheduleEnabledToggle(event: Event): void {
+    onScheduleEnabledToggleHandler(this, event);
+  }
+
+  onScheduleTimezoneInput(event: Event): void {
+    onScheduleTimezoneInputHandler(this, event);
+  }
+
+  onScheduleOnceAtInput(event: Event): void {
+    onScheduleOnceAtInputHandler(this, event);
+  }
+
+  onScheduleRecurringTypeChange(event: Event): void {
+    onScheduleRecurringTypeChangeHandler(this, event);
+  }
+
+  onScheduleMinuteInput(event: Event): void {
+    onScheduleMinuteInputHandler(this, event);
+  }
+
+  onScheduleTimeInput(event: Event): void {
+    onScheduleTimeInputHandler(this, event);
+  }
+
+  onScheduleDayOfMonthInput(event: Event): void {
+    onScheduleDayOfMonthInputHandler(this, event);
+  }
+
+  onScheduleWeekdayToggle(weekday: number, event: Event): void {
+    onScheduleWeekdayToggleHandler(this, weekday, event);
+  }
+
+  isScheduleWeekdaySelected(weekday: number): boolean {
+    return Array.isArray(this.s.triggerScheduleWeekdays)
+      ? this.s.triggerScheduleWeekdays.includes(weekday)
+      : false;
+  }
+
   onExecutionFormValueInput(event: { index: number; value: string }): void {
     onExecutionFormValueInputHandler(this, event);
   }
@@ -475,6 +527,7 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
 
   isTriggerEditor(): boolean { return isTriggerType(this.s.editNodeType); }
   isManualTriggerEditor(): boolean { return isManualTriggerType(this.s.editNodeType); }
+  isScheduleTriggerEditor(): boolean { return isScheduleTriggerType(this.s.editNodeType); }
   isWebhookTriggerEditor(): boolean { return isWebhookTriggerType(this.s.editNodeType); }
   getWebhookTriggerUrl(): string {
     const webhookToken = this.s.triggerWebhookToken.trim();
@@ -590,6 +643,17 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
       triggerOnDeleted: this.s.triggerOnDeleted,
       triggerWebhookToken: this.s.triggerWebhookToken,
       triggerWebhookResponse: this.s.triggerWebhookResponse,
+      triggerScheduleMode: this.s.triggerScheduleMode,
+      triggerScheduleEnabled: this.s.triggerScheduleEnabled,
+      triggerScheduleTimezone: this.s.triggerScheduleTimezone,
+      triggerScheduleOnceAt: this.s.triggerScheduleOnceAt,
+      triggerScheduleRecurringType: this.s.triggerScheduleRecurringType,
+      triggerScheduleMinute: this.s.triggerScheduleMinute,
+      triggerScheduleTime: this.s.triggerScheduleTime,
+      triggerScheduleWeekdays: Array.isArray(this.s.triggerScheduleWeekdays)
+        ? [...this.s.triggerScheduleWeekdays]
+        : [],
+      triggerScheduleDayOfMonth: this.s.triggerScheduleDayOfMonth,
       conditionField: this.s.conditionField,
       conditionOperator: this.s.conditionOperator,
       conditionValue: this.s.conditionValue,

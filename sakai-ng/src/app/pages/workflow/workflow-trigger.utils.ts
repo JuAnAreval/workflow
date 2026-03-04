@@ -16,7 +16,8 @@ export function isTriggerType(type: string): type is TriggerNodeType {
     type === 'trigger_task_event' ||
     type === 'trigger_user_event' ||
     type === 'trigger_manual_event' ||
-    type === 'trigger_webhook_event'
+    type === 'trigger_webhook_event' ||
+    type === 'trigger_schedule_event'
   );
 }
 
@@ -28,7 +29,14 @@ export function isWebhookTriggerType(type: string): boolean {
   return type === 'trigger_webhook_event';
 }
 
+export function isScheduleTriggerType(type: string): boolean {
+  return type === 'trigger_schedule_event';
+}
+
 export function normalizeTriggerType(type: string): TriggerNodeType {
+  if (type === 'trigger_schedule_event') {
+    return 'trigger_schedule_event';
+  }
   if (type === 'trigger_webhook_event') {
     return 'trigger_webhook_event';
   }
@@ -54,6 +62,9 @@ export function resolveTriggerEntity(type: string): TriggerEntity | null {
   if (type === 'trigger_webhook_event') {
     return 'webhook';
   }
+  if (type === 'trigger_schedule_event') {
+    return 'schedule';
+  }
   if (type === 'trigger_task_event') {
     return 'task';
   }
@@ -73,6 +84,9 @@ export function resolveTriggerEntityLabel(type: string): string {
   }
   if (entity === 'webhook') {
     return 'webhook';
+  }
+  if (entity === 'schedule') {
+    return 'programacion';
   }
   if (entity === 'task') {
     return 'tarea';

@@ -405,6 +405,25 @@ export class WorkflowList implements OnInit {
     });
   }
 
+  deleteAllWorkflows(): void {
+    const totalWorkflows = this.availableWorkflows.length;
+    if (!totalWorkflows) {
+      return;
+    }
+
+    this.confirmationService.confirm({
+      message: `Estas seguro de que quieres eliminar todos tus workflows (${totalWorkflows})? Esta accion no se puede deshacer.`,
+      header: 'Confirmar eliminacion masiva',
+      icon: 'pi pi-exclamation-triangle',
+      acceptButtonStyleClass: 'p-button-danger',
+      acceptLabel: 'Eliminar todo',
+      rejectLabel: 'Cancelar',
+      accept: () => {
+        void this.performDeleteAllWorkflows();
+      },
+    });
+  }
+
   private async renameWorkflow(
     workflow: WorkflowModel,
     nextName: string,
@@ -434,15 +453,7 @@ export class WorkflowList implements OnInit {
   private async performDeleteWorkflow(workflow: WorkflowModel): Promise<void> {
     this.isLoading = true;
     try {
-      const graph = await this.fetchWorkflowGraph(workflow.id);
-      for (const edge of graph.edges) {
-        await firstValueFrom(this.workflowEdgeService.Delete(edge.id));
-      }
-      for (const node of graph.nodes) {
-        await firstValueFrom(this.workflowNodeService.Delete(node.id));
-      }
-
-      await firstValueFrom(this.workflowService.Delete(workflow.id));
+      await this.deleteWorkflowCascade(workflow);
       await this.refreshWorkflowCatalog();
       this.statusMessage = `Workflow "${workflow.name}" eliminado.`;
     } catch (error) {
@@ -450,6 +461,47 @@ export class WorkflowList implements OnInit {
       this.statusMessage = reason
         ? `No se pudo eliminar el workflow: ${reason}`
         : 'No se pudo eliminar el workflow.';
+    } finally {
+      this.isLoading = false;
+      this.requestUiRefresh();
+    }
+  }
+
+  private async performDeleteAllWorkflows(): Promise<void> {
+    const workflowsToDelete = [...this.availableWorkflows];
+    if (!workflowsToDelete.length) {
+      this.statusMessage = 'No hay workflows para eliminar.';
+      this.requestUiRefresh();
+      return;
+    }
+
+    this.isLoading = true;
+    let deletedCount = 0;
+    let failedCount = 0;
+
+    try {
+      for (const workflow of workflowsToDelete) {
+        try {
+          await this.deleteWorkflowCascade(workflow);
+          deletedCount += 1;
+        } catch {
+          failedCount += 1;
+        }
+      }
+
+      await this.refreshWorkflowCatalog();
+
+      if (!failedCount) {
+        this.statusMessage = `Se eliminaron ${deletedCount} workflows.`;
+        return;
+      }
+
+      if (!deletedCount) {
+        this.statusMessage = 'No se pudo eliminar ningun workflow.';
+        return;
+      }
+
+      this.statusMessage = `Se eliminaron ${deletedCount} workflows. Fallaron ${failedCount}.`;
     } finally {
       this.isLoading = false;
       this.requestUiRefresh();
@@ -512,6 +564,18 @@ export class WorkflowList implements OnInit {
     );
 
     return { nodes, edges };
+  }
+
+  private async deleteWorkflowCascade(workflow: WorkflowModel): Promise<void> {
+    const graph = await this.fetchWorkflowGraph(workflow.id);
+    for (const edge of graph.edges) {
+      await firstValueFrom(this.workflowEdgeService.Delete(edge.id));
+    }
+    for (const node of graph.nodes) {
+      await firstValueFrom(this.workflowNodeService.Delete(node.id));
+    }
+
+    await firstValueFrom(this.workflowService.Delete(workflow.id));
   }
 
   private async fetchAllPages<T>(

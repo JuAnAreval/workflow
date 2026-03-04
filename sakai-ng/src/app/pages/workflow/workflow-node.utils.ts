@@ -31,6 +31,9 @@ function resolveNodeSubtitle(type: string): string {
   if (normalized === 'trigger_webhook_event') {
     return 'Entrada webhook';
   }
+  if (normalized === 'trigger_schedule_event') {
+    return 'Trigger programado';
+  }
   if (normalized === 'trigger_project_event' || normalized === 'trigger_project_created') {
     return 'Evento proyecto';
   }
