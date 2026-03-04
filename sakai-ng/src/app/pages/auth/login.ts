@@ -2,6 +2,7 @@ import { Component } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { RouterModule } from '@angular/router';
+import { HttpErrorResponse } from '@angular/common/http';
 import { ButtonModule } from 'primeng/button';
 import { CheckboxModule } from 'primeng/checkbox';
 import { InputTextModule } from 'primeng/inputtext';
@@ -44,10 +45,38 @@ import { AuthService } from '../../core/services/auth/auth.service';
 
                         <div>
                             <label for="email1" class="block text-surface-900 dark:text-surface-0 text-xl font-medium mb-2">Email</label>
-                            <input pInputText id="email1" type="text" placeholder="Email address" class="w-full md:w-120 mb-8" [(ngModel)]="email" />
+                            <input
+                                pInputText
+                                id="email1"
+                                type="text"
+                                placeholder="Email address"
+                                class="w-full md:w-120 mb-2"
+                                [class.p-invalid]="!!emailError"
+                                [(ngModel)]="email"
+                                (ngModelChange)="clearFieldError('email')"
+                            />
+                            <div class="text-red-500 text-sm mb-4 min-h-5" [style.visibility]="emailError ? 'visible' : 'hidden'">{{ emailError || ' ' }}</div>
 
                             <label for="password1" class="block text-surface-900 dark:text-surface-0 font-medium text-xl mb-2">Password</label>
-                            <p-password id="password1" [(ngModel)]="password" placeholder="Password" [toggleMask]="true" styleClass="mb-4" [fluid]="true" [feedback]="false"></p-password>
+                            <p-password
+                                id="password1"
+                                [(ngModel)]="password"
+                                placeholder="Password"
+                                [toggleMask]="true"
+                                styleClass="mb-2"
+                                [fluid]="true"
+                                [feedback]="false"
+                                [inputStyleClass]="passwordError ? 'p-invalid' : ''"
+                                (ngModelChange)="clearFieldError('password')"
+                            ></p-password>
+                            <div class="text-red-500 text-sm mb-4 min-h-5" [style.visibility]="passwordError ? 'visible' : 'hidden'">{{ passwordError || ' ' }}</div>
+
+                            <div
+                                class="text-red-600 text-sm bg-red-50 border border-red-200 rounded-md px-3 py-2 mb-4"
+                                [style.display]="generalError ? 'block' : 'none'"
+                            >
+                                {{ generalError }}
+                            </div>
 
                             <div class="flex items-center justify-between mt-2 mb-8 gap-8">
                                 <div class="flex items-center">
@@ -56,7 +85,7 @@ import { AuthService } from '../../core/services/auth/auth.service';
                                 </div>
                                 <span class="font-medium no-underline ml-2 text-right cursor-pointer text-primary">Forgot password?</span>
                             </div>
-                            <p-button label="Sign In" styleClass="w-full" (onClick)="signIn()"></p-button>
+                            <p-button label="Sign In" styleClass="w-full" [loading]="isSubmitting" [disabled]="!canSubmit" (onClick)="signIn()"></p-button>
                         </div>
                     </div>
                 </div>
@@ -71,21 +100,95 @@ export class Login {
 
     checked: boolean = false;
 
+    emailError: string = '';
+
+    passwordError: string = '';
+
+    generalError: string = '';
+
+    isSubmitting: boolean = false;
+
     constructor(
         private authService: AuthService,
         private router: Router
     ) { }
 
+    get canSubmit(): boolean {
+        return !this.isSubmitting && this.email.trim().length > 0 && this.password.length > 0;
+    }
+
+    clearFieldError(field: 'email' | 'password') {
+        if (field === 'email') {
+            this.emailError = '';
+        }
+
+        if (field === 'password') {
+            this.passwordError = '';
+        }
+
+        this.generalError = '';
+    }
+
+    resetErrors() {
+        this.emailError = '';
+        this.passwordError = '';
+        this.generalError = '';
+    }
+
+    handleLoginError(error: HttpErrorResponse) {
+        const payload = error?.error as { errors?: Record<string, string> } | undefined;
+        const emailErrorCode = payload?.errors?.['email'] ?? '';
+        const passwordErrorCode = payload?.errors?.['password'] ?? '';
+
+        if (emailErrorCode === 'notFound') {
+            this.emailError = 'El correo no existe.';
+            return;
+        }
+
+        if (emailErrorCode.startsWith('needLoginViaProvider:')) {
+            const provider = emailErrorCode.split(':')[1] || 'otro proveedor';
+            this.emailError = `Este correo debe iniciar con ${provider}.`;
+            return;
+        }
+
+        if (passwordErrorCode === 'incorrectPassword') {
+            this.passwordError = 'La contrasena es incorrecta.';
+            return;
+        }
+
+        this.generalError = 'No se pudo iniciar sesion. Verifica tus datos e intenta nuevamente.';
+        console.error('Login failed', error);
+    }
+
     signIn() {
+        this.resetErrors();
+
+        const normalizedEmail = this.email.trim();
+
+        if (!normalizedEmail) {
+            this.emailError = 'El correo es obligatorio.';
+            return;
+        }
+
+        if (!this.password) {
+            this.passwordError = 'La contrasena es obligatoria.';
+            return;
+        }
+
+        this.email = normalizedEmail;
+        this.isSubmitting = true;
+
         this.authService.login(this.email, this.password).subscribe({
             next: (response) => {
+                this.isSubmitting = false;
                 this.authService.setSession(response);
                 this.router.navigate(['/']);
             },
 
-            error: (error) => {
+            error: (error: HttpErrorResponse) => {
+                this.isSubmitting = false;
                 this.authService.clearSession();
-                console.error('Login failed', error);
+                this.handleLoginError(error);
             }
         });
     }
