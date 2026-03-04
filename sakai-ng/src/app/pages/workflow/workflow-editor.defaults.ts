@@ -1,4 +1,8 @@
-import { ConditionOperator } from './workflow.types';
+import {
+  ConditionOperator,
+  WorkflowScheduleMode,
+  WorkflowScheduleRecurringType,
+} from './workflow.types';
 
 export type WorkflowEditorDefaults = {
   actionFormFields: Array<{
@@ -30,6 +34,15 @@ export type WorkflowEditorDefaults = {
   triggerOnDeleted: boolean;
   triggerWebhookToken: string;
   triggerWebhookResponse: string;
+  triggerScheduleMode: WorkflowScheduleMode;
+  triggerScheduleEnabled: boolean;
+  triggerScheduleTimezone: string;
+  triggerScheduleOnceAt: string;
+  triggerScheduleRecurringType: WorkflowScheduleRecurringType;
+  triggerScheduleMinute: number;
+  triggerScheduleTime: string;
+  triggerScheduleWeekdays: number[];
+  triggerScheduleDayOfMonth: number;
 };
 
 export const WORKFLOW_EDITOR_DEFAULTS: WorkflowEditorDefaults = {
@@ -74,4 +87,13 @@ export const WORKFLOW_EDITOR_DEFAULTS: WorkflowEditorDefaults = {
   triggerOnDeleted: false,
   triggerWebhookToken: '',
   triggerWebhookResponse: '{\n  "event": "created"\n}',
+  triggerScheduleMode: 'once',
+  triggerScheduleEnabled: true,
+  triggerScheduleTimezone: 'America/Bogota',
+  triggerScheduleOnceAt: '2026-12-31T23:59:59',
+  triggerScheduleRecurringType: 'daily',
+  triggerScheduleMinute: 0,
+  triggerScheduleTime: '09:00',
+  triggerScheduleWeekdays: [],
+  triggerScheduleDayOfMonth: 1,
 };

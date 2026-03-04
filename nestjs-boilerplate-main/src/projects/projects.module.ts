@@ -2,6 +2,7 @@ import {
   // do not remove this comment
   Module,
 } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { ProjectsService } from './projects.service';
 import { ProjectsController } from './projects.controller';
 import { RelationalProjectPersistenceModule } from './infrastructure/persistence/relational/relational-persistence.module';
@@ -16,6 +17,8 @@ import { DatabaseConfig } from '../database/config/database-config.type';
 import databaseConfig from '../database/config/database.config';
 import { WorkflowAssignmentsModule } from '../workflow-assignments/workflow-assignments.module';
 import { WorkflowJsonStorageModule } from '../workflow-json-storage/workflow-json-storage.module';
+import { WorkflowScheduleRuntimeEntity } from './infrastructure/persistence/relational/entities/workflow-schedule-runtime.entity';
+import { ProjectWorkflowSchedulerService } from './project-workflow-scheduler.service';
 
 const userPersistenceModule = (databaseConfig() as DatabaseConfig)
   .isDocumentDatabase
@@ -33,9 +36,14 @@ const userPersistenceModule = (databaseConfig() as DatabaseConfig)
     userPersistenceModule,
     WorkflowAssignmentsModule,
     WorkflowJsonStorageModule,
+    TypeOrmModule.forFeature([WorkflowScheduleRuntimeEntity]),
   ],
   controllers: [ProjectsController],
-  providers: [ProjectsService, ProjectWorkflowAutomationService],
+  providers: [
+    ProjectsService,
+    ProjectWorkflowAutomationService,
+    ProjectWorkflowSchedulerService,
+  ],
   exports: [
     ProjectsService,
     ProjectWorkflowAutomationService,

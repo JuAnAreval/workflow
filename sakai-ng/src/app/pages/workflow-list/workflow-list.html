@@ -14,15 +14,26 @@
           </div>
         </div>
 
-        <button
-          type="button"
-          class="catalog-btn catalog-btn-primary"
-          [disabled]="isLoading"
-          (click)="promptCreateWorkflow()"
-        >
-          <i class="pi pi-plus"></i>
-          Crear workflow
-        </button>
+        <div class="catalog-head-actions">
+          <button
+            type="button"
+            class="catalog-btn catalog-btn-primary"
+            [disabled]="isLoading || isSaving"
+            (click)="promptCreateWorkflow()"
+          >
+            <i class="pi pi-plus"></i>
+            Crear workflow
+          </button>
+          <button
+            type="button"
+            class="catalog-btn catalog-btn-danger"
+            [disabled]="isLoading || isSaving || !availableWorkflows.length"
+            (click)="deleteAllWorkflows()"
+          >
+            <i class="pi pi-trash"></i>
+            Eliminar todos
+          </button>
+        </div>
       </header>
 
       <div class="catalog-table-wrap">

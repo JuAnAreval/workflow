@@ -81,8 +81,8 @@
     <section class="onboarding-card">
       <h2>Empieza por el trigger</h2>
       <p>
-        Define si el flujo inicia por evento de proyecto/tarea/usuario, por webhook o por
-        ejecucion manual.
+        Define si el flujo inicia por evento de proyecto/tarea/usuario, por webhook,
+        por ejecucion manual o por programacion.
       </p>
       <button type="button" class="onboarding-btn" (click)="createInitialTrigger()">
         Elegir trigger inicial
@@ -129,17 +129,306 @@
               class="menu-input"
               [value]="editNodeLabel"
               (input)="onNodeLabelInput($event)"
-              placeholder="Nombre visible del nodo"
+              placeholder="Nombre descriptivo"
             />
           </label>
 
-          @if (isTriggerEditor() && !useRawConfigEditor) {
+          @if (isTriggerEditor() && (!useRawConfigEditor || isScheduleTriggerEditor())) {
             <div class="visual-card">
               @if (isManualTriggerEditor()) {
                 <p class="visual-title">Trigger manual</p>
                 <p class="menu-empty">
                   Este nodo se activa solo cuando uses el boton Ejecutar.
                 </p>
+              } @else if (isScheduleTriggerEditor()) {
+                <p class="visual-title">Trigger programado</p>
+                <p class="menu-empty">
+                  Ejecuta el workflow por fecha fija o de forma automatizada sin catch-up.
+                </p>
+
+                <div class="schedule-form" style="display:grid;gap:.62rem;">
+                  <section
+                    class="schedule-section"
+                    style="display:grid;gap:.4rem;border:1px solid #d6e5f3;border-radius:.72rem;padding:.62rem;background:rgba(255,255,255,.86);"
+                  >
+                    <p
+                      class="schedule-section-title"
+                      style="margin:0;color:#355474;font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;"
+                    >
+                      Activacion
+                    </p>
+                    <label class="check-row">
+                      <input
+                        type="checkbox"
+                        [checked]="triggerScheduleEnabled"
+                        (change)="onScheduleEnabledToggle($event)"
+                      />
+                      <span>Trigger activo</span>
+                    </label>
+                  </section>
+
+                  <section
+                    class="schedule-section"
+                    style="display:grid;gap:.4rem;border:1px solid #d6e5f3;border-radius:.72rem;padding:.62rem;background:rgba(255,255,255,.86);"
+                  >
+                    <p
+                      class="schedule-section-title"
+                      style="margin:0;color:#355474;font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;"
+                    >
+                      Modo de ejecucion
+                    </p>
+                    <div
+                      class="schedule-mode-toggle"
+                      style="display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.42rem;"
+                    >
+                      <label
+                        class="schedule-mode-option"
+                        [class.active]="triggerScheduleMode === 'once'"
+                        [style.border]="'1px solid ' + (triggerScheduleMode === 'once' ? '#99bbe2' : '#d2e2f1')"
+                        [style.background]="triggerScheduleMode === 'once' ? '#edf5ff' : '#ffffff'"
+                        [style.color]="triggerScheduleMode === 'once' ? '#244e7e' : '#3e5f82'"
+                        style="border-radius:.5rem;padding:.4rem .52rem;display:flex;align-items:center;gap:.38rem;cursor:pointer;font-size:.82rem;"
+                      >
+                        <input
+                          type="radio"
+                          name="schedule-mode"
+                          value="once"
+                          [checked]="triggerScheduleMode === 'once'"
+                          (change)="onScheduleModeChange($event)"
+                        />
+                        <span>Una vez (fecha fija)</span>
+                      </label>
+                      <label
+                        class="schedule-mode-option"
+                        [class.active]="triggerScheduleMode === 'recurring'"
+                        [style.border]="'1px solid ' + (triggerScheduleMode === 'recurring' ? '#99bbe2' : '#d2e2f1')"
+                        [style.background]="triggerScheduleMode === 'recurring' ? '#edf5ff' : '#ffffff'"
+                        [style.color]="triggerScheduleMode === 'recurring' ? '#244e7e' : '#3e5f82'"
+                        style="border-radius:.5rem;padding:.4rem .52rem;display:flex;align-items:center;gap:.38rem;cursor:pointer;font-size:.82rem;"
+                      >
+                        <input
+                          type="radio"
+                          name="schedule-mode"
+                          value="recurring"
+                          [checked]="triggerScheduleMode === 'recurring'"
+                          (change)="onScheduleModeChange($event)"
+                        />
+                        <span>Recurrente (automatizado)</span>
+                      </label>
+                    </div>
+                  </section>
+
+                  <div
+                    class="schedule-config-shell"
+                    [style.opacity]="triggerScheduleEnabled ? '1' : '0.56'"
+                    [style.pointerEvents]="triggerScheduleEnabled ? 'auto' : 'none'"
+                    style="display:grid;gap:.52rem;"
+                  >
+                    <section
+                      class="schedule-section schedule-animated-panel"
+                      style="display:grid;gap:.4rem;border:1px solid #d6e5f3;border-radius:.72rem;padding:.62rem;background:rgba(255,255,255,.86);"
+                    >
+                      <p
+                        class="schedule-section-title"
+                        style="margin:0;color:#355474;font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;"
+                      >
+                        Configuracion horaria
+                      </p>
+                      @if (triggerScheduleMode === 'once') {
+                        <label class="menu-field">
+                          <span>Fecha y hora</span>
+                          <input
+                            type="datetime-local"
+                            class="menu-input"
+                            step="1"
+                            [value]="getScheduleOnceAtInputValue()"
+                            (input)="onScheduleOnceAtInput($event)"
+                          />
+                          <small class="menu-field-note">
+                            Formato visual: YYYY-MM-DD HH:mm:ss. Se aplica la zona horaria seleccionada.
+                          </small>
+                        </label>
+                      } @else {
+                        <label class="menu-field">
+                          <span>Frecuencia</span>
+                          <select
+                            class="menu-select"
+                            [value]="triggerScheduleRecurringType"
+                            (change)="onScheduleRecurringTypeChange($event)"
+                          >
+                            <option value="hourly">Cada hora</option>
+                            <option value="daily">Cada dia</option>
+                            <option value="weekly">Cada semana</option>
+                            <option value="monthly">Cada mes</option>
+                          </select>
+                        </label>
+
+                        @if (triggerScheduleRecurringType === 'hourly') {
+                          <div class="schedule-animated-panel">
+                            <label class="menu-field">
+                              <span>Minuto (0-59)</span>
+                              <input
+                                type="number"
+                                min="0"
+                                max="59"
+                                class="menu-input"
+                                [value]="triggerScheduleMinute"
+                                (input)="onScheduleMinuteInput($event)"
+                              />
+                              <small class="menu-field-note">
+                                Se ejecutara cada hora en el minuto indicado.
+                              </small>
+                            </label>
+                          </div>
+                        } @else {
+                          <div class="schedule-animated-panel">
+                            <label class="menu-field">
+                              <span>Hora (HH:mm)</span>
+                              <input
+                                type="time"
+                                class="menu-input"
+                                [value]="triggerScheduleTime"
+                                (input)="onScheduleTimeInput($event)"
+                                step="60"
+                              />
+                            </label>
+                          </div>
+                        }
+
+                        @if (triggerScheduleRecurringType === 'weekly') {
+                          <div class="menu-field schedule-animated-panel">
+                            <span>Dias de la semana</span>
+                            <div style="margin-top:.24rem;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.38rem;">
+                              @for (weekday of scheduleWeekdayOptions; track weekday.value) {
+                                <label class="check-row" style="margin:0;">
+                                  <input
+                                    type="checkbox"
+                                    [checked]="isScheduleWeekdaySelected(weekday.value)"
+                                    (change)="onScheduleWeekdayToggle(weekday.value, $event)"
+                                  />
+                                  <span>{{ weekday.label }}</span>
+                                </label>
+                              }
+                            </div>
+                          </div>
+                        }
+
+                        @if (triggerScheduleRecurringType === 'monthly') {
+                          <div class="schedule-animated-panel">
+                            <label class="menu-field">
+                              <span>Dia del mes (1-31)</span>
+                              <select
+                                class="menu-select"
+                                [value]="triggerScheduleDayOfMonth"
+                                (change)="onScheduleDayOfMonthInput($event)"
+                                title="Si el dia no existe en un mes, la ejecucion se ajusta segun la logica de backend."
+                              >
+                                @for (dayOption of scheduleDayOfMonthOptions; track dayOption) {
+                                  <option [value]="dayOption">{{ dayOption }}</option>
+                                }
+                              </select>
+                              <small class="menu-field-note">
+                                Si el dia no existe en el mes, se aplica la logica de ejecucion del backend.
+                              </small>
+                              @if (shouldShowScheduleMonthlyDayWarning()) {
+                                <small class="menu-field-note warn">
+                                  Aviso: los dias 29, 30 y 31 no existen en todos los meses.
+                                </small>
+                              }
+                            </label>
+                          </div>
+                        }
+                      }
+                    </section>
+
+                    <section
+                      class="schedule-section schedule-animated-panel"
+                      style="display:grid;gap:.4rem;border:1px solid #d6e5f3;border-radius:.72rem;padding:.62rem;background:rgba(255,255,255,.86);"
+                    >
+                      <p
+                        class="schedule-section-title"
+                        style="margin:0;color:#355474;font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;"
+                      >
+                        Zona horaria
+                      </p>
+                      <label class="menu-field">
+                        <span>Selecciona zona horaria</span>
+                        <input
+                          type="text"
+                          class="menu-input"
+                          [value]="triggerScheduleTimezone"
+                          (input)="onScheduleTimezoneInput($event)"
+                          list="workflow-schedule-timezones"
+                          placeholder="America/Bogota"
+                        />
+                        <datalist id="workflow-schedule-timezones">
+                          @for (timezoneOption of scheduleTimezoneOptions; track timezoneOption.value) {
+                            <option [value]="timezoneOption.value">
+                              {{ timezoneOption.label }}
+                            </option>
+                          }
+                        </datalist>
+                        <small class="menu-field-note">
+                          Hora actual en la zona: {{ getScheduleTimezoneCurrentTimeLabel() }}
+                        </small>
+                      </label>
+                    </section>
+
+                    <section
+                      class="schedule-section schedule-advanced-section"
+                      style="display:grid;gap:.4rem;border:1px solid #d6e5f3;border-radius:.72rem;padding:.62rem;background:rgba(255,255,255,.86);"
+                    >
+                      <p
+                        class="schedule-section-title"
+                        style="margin:0;color:#355474;font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;"
+                      >
+                        Configuracion avanzada (JSON)
+                      </p>
+                      <button
+                        type="button"
+                        class="menu-link-btn"
+                        (click)="toggleRawConfigEditor()"
+                      >
+                        {{
+                          useRawConfigEditor
+                            ? 'Ocultar configuracion avanzada en JSON'
+                            : 'Mostrar configuracion avanzada en JSON'
+                        }}
+                      </button>
+
+                      @if (useRawConfigEditor) {
+                        <p class="menu-field-note warn">
+                          Los cambios manuales pueden sobrescribir la configuracion visual.
+                        </p>
+                        <label class="menu-field schedule-animated-panel">
+                          <span>Config JSON</span>
+                          <textarea
+                            class="menu-textarea"
+                            rows="7"
+                            [value]="editNodeConfig"
+                            (input)="onNodeConfigInput($event)"
+                            placeholder='{"events":["schedule"]}'
+                          ></textarea>
+                        </label>
+                      }
+                    </section>
+                  </div>
+
+                  @if (getScheduleValidationMessage()) {
+                    <p
+                      class="menu-field-error"
+                      style="margin:0;color:#a65342;font-size:.78rem;font-weight:600;"
+                    >
+                      {{ getScheduleValidationMessage() }}
+                    </p>
+                  }
+                  <p
+                    class="schedule-summary"
+                    style="margin:0;color:#4f6a85;font-size:.78rem;"
+                  >
+                    {{ getScheduleSummary() }}
+                  </p>
+                </div>
               } @else if (isWebhookTriggerEditor()) {
                 <p class="visual-title">Trigger webhook</p>
                 <p class="menu-empty">
@@ -1161,7 +1450,7 @@
             </div>
           }
 
-          @if (useRawConfigEditor || !isVisualEditorNode()) {
+          @if ((useRawConfigEditor && !isScheduleTriggerEditor()) || !isVisualEditorNode()) {
             <label class="menu-field">
               <span>Config JSON</span>
               <textarea
@@ -1174,7 +1463,7 @@
             </label>
           }
 
-          @if (isVisualEditorNode()) {
+          @if (isVisualEditorNode() && !isScheduleTriggerEditor()) {
             <button
               type="button"
               class="menu-link-btn"
@@ -1243,7 +1532,7 @@
               <button
                 type="button"
                 class="menu-btn menu-btn-primary"
-                [disabled]="isSaving || isTestingHttpRequest"
+                [disabled]="isNodeFormSaveDisabled()"
                 (click)="saveSelectedNodeChanges()"
               >
                 Guardar cambios
