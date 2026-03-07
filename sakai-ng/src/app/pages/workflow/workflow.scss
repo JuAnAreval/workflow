@@ -240,8 +240,20 @@
   box-shadow: 0 8px 18px rgba(69, 105, 149, 0.18);
 }
 
-:host ::ng-deep .workflow-right-drawer {
-  width: min(34rem, 97vw);
+:host ::ng-deep .workflow-right-drawer,
+:host ::ng-deep .workflow-right-drawer.p-drawer {
+  width: min(27rem, 97vw);
+  max-width: 99vw;
+}
+
+:host ::ng-deep .workflow-right-drawer.workflow-right-drawer--decision,
+:host ::ng-deep .workflow-right-drawer.workflow-right-drawer--decision.p-drawer {
+  width: min(39rem, 99vw);
+}
+
+:host ::ng-deep .workflow-right-drawer.workflow-right-drawer--javascript,
+:host ::ng-deep .workflow-right-drawer.workflow-right-drawer--javascript.p-drawer {
+  width: min(39rem, 99vw);
 }
 
 :host ::ng-deep .workflow-right-drawer .p-drawer {
@@ -373,6 +385,21 @@
   border-color: #9ebbd8;
   background: #f8fbff;
   box-shadow: 0 10px 20px rgba(67, 102, 144, 0.15);
+}
+
+.menu-btn-inline-danger,
+.menu-btn-inline-ghost {
+  width: auto;
+  min-height: 1.84rem;
+  margin: 0;
+  padding: 0.26rem 0.56rem;
+  border-radius: 0.58rem;
+  font-size: 0.78rem;
+  line-height: 1.1;
+}
+
+.menu-btn-inline-ghost {
+  margin-top: 0.5rem;
 }
 
 .menu-template-btn {
@@ -652,6 +679,136 @@
   line-height: 1.42;
 }
 
+.wf-js-section {
+  display: grid;
+  gap: 0.42rem;
+  border: 1px solid #d3e2ef;
+  border-radius: 0.76rem;
+  background: #fbfdff;
+  padding: 0.56rem;
+}
+
+.wf-js-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.wf-js-section-title {
+  margin: 0;
+  color: #284763;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.wf-js-add-input-btn {
+  width: auto;
+  min-height: 1.88rem;
+  margin: 0;
+  padding: 0.26rem 0.56rem;
+  border-radius: 0.6rem;
+  font-size: 0.78rem;
+}
+
+.wf-js-input-list {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.wf-js-input-row {
+  border: 1px solid #d3e2f0;
+  border-radius: 0.68rem;
+  padding: 0.44rem 0.46rem;
+  background: linear-gradient(180deg, #f9fcff 0%, #f4f9ff 100%);
+}
+
+.wf-js-input-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) auto;
+  gap: 0.36rem;
+  align-items: end;
+}
+
+.wf-js-field {
+  margin: 0;
+  gap: 0.24rem;
+}
+
+.wf-js-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 1rem;
+  color: #375777;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.wf-js-color-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 999px;
+  border: 1px solid rgba(20, 38, 59, 0.2);
+  flex-shrink: 0;
+}
+
+.wf-js-compact-input {
+  min-height: 1.94rem;
+  padding: 0.38rem 0.5rem;
+  font-size: 0.84rem;
+}
+
+.wf-js-remove-btn {
+  width: 1.9rem;
+  height: 1.94rem;
+  border: 1px solid #d8aeb4;
+  border-radius: 0.56rem;
+  background: #fff4f5;
+  color: #95464e;
+  font-size: 0.92rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.wf-js-monaco-shell {
+  width: 100%;
+  min-height: 20rem;
+  height: 46vh;
+  max-height: 34rem;
+  border: 1px solid #c4d7ea;
+  border-radius: 0.68rem;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.wf-js-monaco {
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 940px) {
+  .wf-js-input-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wf-js-remove-btn {
+    width: 100%;
+    height: 1.85rem;
+  }
+}
+
+:host ::ng-deep .monaco-editor .wf-js-var-color-0 { color: #1f6feb !important; }
+:host ::ng-deep .monaco-editor .wf-js-var-color-1 { color: #0f8b8d !important; }
+:host ::ng-deep .monaco-editor .wf-js-var-color-2 { color: #cc5803 !important; }
+:host ::ng-deep .monaco-editor .wf-js-var-color-3 { color: #9b5de5 !important; }
+:host ::ng-deep .monaco-editor .wf-js-var-color-4 { color: #2a9d8f !important; }
+:host ::ng-deep .monaco-editor .wf-js-var-color-5 { color: #c03a2b !important; }
+:host ::ng-deep .monaco-editor .wf-js-var-color-6 { color: #3a86ff !important; }
+:host ::ng-deep .monaco-editor .wf-js-var-color-7 { color: #588157 !important; }
+
 .board-controls {
   position: absolute;
   z-index: 8;
@@ -774,7 +931,9 @@
 }
 
 @media (max-width: 980px) {
-  :host ::ng-deep .workflow-right-drawer {
+  :host ::ng-deep .workflow-right-drawer,
+  :host ::ng-deep .workflow-right-drawer.p-drawer,
+  :host ::ng-deep .workflow-right-drawer .p-drawer {
     width: min(30rem, 100vw);
     max-width: 100vw;
   }

@@ -119,12 +119,15 @@ import {
 import {
   clearNodeEditorDraftHandler,
   cloneHttpHeadersValue,
+  cloneJavascriptInputsValue,
   cloneJsonFieldsValue,
   createEdgeBetweenNodesHandler,
+  getAdderContextFromNodeHandler,
   getActiveEditorNodeHandler,
   getAdderSourceNodeHandler,
   getNodeByIdHandler,
   getNodeSourceForMenuCreationHandler,
+  getRouteKeyForMenuCreationHandler,
   isEditableTargetValue,
   loadVisualDraftFromNodeConfigHandler,
   openAddMenuFromAdderHandler,
@@ -539,21 +542,26 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
     if (this.s.isWebhookTriggerEditor()) this.s.triggerWebhookToken = generateWebhookTokenValue();
   }
   isConditionEditor(): boolean { return this.s.editNodeType === 'decision_condition'; }
+  isIfEditor(): boolean { return this.s.editNodeType === 'decision_if'; }
+  isSwitchEditor(): boolean { return this.s.editNodeType === 'decision_switch'; }
   isCreateProjectEditor(): boolean { return this.s.editNodeType === 'action_create_project'; }
   isCreateTaskEditor(): boolean { return this.s.editNodeType === 'action_create_task'; }
   isCreateUserEditor(): boolean { return this.s.editNodeType === 'action_create_user'; }
   isFormActionEditor(): boolean { return this.s.editNodeType === 'action_form_builder'; }
   isHttpRequestEditor(): boolean { return this.s.editNodeType === 'action_http_request'; }
+  isJavascriptEditor(): boolean { return this.s.editNodeType === 'action_javascript_code'; }
 
   isVisualEditorNode(): boolean {
     return (
       this.s.isTriggerEditor() ||
-      this.s.isConditionEditor() ||
+      this.s.isIfEditor() ||
+      this.s.isSwitchEditor() ||
       this.s.isCreateProjectEditor() ||
       this.s.isCreateUserEditor() ||
       this.s.isCreateTaskEditor() ||
       this.s.isFormActionEditor() ||
-      this.s.isHttpRequestEditor()
+      this.s.isHttpRequestEditor() ||
+      this.s.isJavascriptEditor()
     );
   }
 
@@ -578,6 +586,7 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
       | 'userFirstName'
       | 'userLastName'
       | 'userEmail'
+      | 'userPassword'
       | 'httpUrl'
       | 'httpBody'
       | 'httpResponse',
@@ -657,6 +666,10 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
       conditionField: this.s.conditionField,
       conditionOperator: this.s.conditionOperator,
       conditionValue: this.s.conditionValue,
+      conditionTree: this.s.conditionTree,
+      decisionIfLogicalOperator: this.s.decisionIfLogicalOperator,
+      decisionIfRules: this.s.cloneDecisionRules(this.s.decisionIfRules),
+      decisionSwitchCases: this.s.cloneDecisionRules(this.s.decisionSwitchCases),
       actionAssignedUserId: this.s.actionAssignedUserId,
       actionProjectName: this.s.actionProjectName,
       actionProjectDescription: this.s.actionProjectDescription,
@@ -666,12 +679,21 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
       actionUserFirstName: this.s.actionUserFirstName,
       actionUserLastName: this.s.actionUserLastName,
       actionUserEmail: this.s.actionUserEmail,
+      actionUserPassword: this.s.actionUserPassword,
+      actionUserRoleId: this.s.actionUserRoleId,
+      actionUserStatusId: this.s.actionUserStatusId,
       actionFormFields: this.s.cloneJsonFields(this.s.actionFormFields),
       actionHttpUrl: this.s.actionHttpUrl,
       actionHttpMethod: this.s.actionHttpMethod,
       actionHttpHeaders: this.s.cloneHttpHeaders(this.s.actionHttpHeaders),
       actionHttpBody: this.s.actionHttpBody,
       actionHttpResponse: this.s.actionHttpResponse,
+      actionJavascriptInputs: this.s.cloneJavascriptInputs(
+        this.s.actionJavascriptInputs,
+      ),
+      actionJavascriptCode: this.s.actionJavascriptCode,
+      actionJavascriptResultKey: this.s.actionJavascriptResultKey,
+      actionJavascriptResponse: this.s.actionJavascriptResponse,
     });
 
     if (!result.config && result.errorMessage && showErrors) {
@@ -700,7 +722,13 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
   protected async refreshWorkflowCatalog(): Promise<void> { await refreshWorkflowCatalogHandler(this); }
   protected async fetchWorkflowGraph(workflowId: string): Promise<{ nodes: WorkflowNodeModel[]; edges: WorkflowEdgeModel[] }> { return fetchWorkflowGraphHandler(this, workflowId); }
   protected getActiveEditorNode(): NodeSingular | null { return getActiveEditorNodeHandler(this); }
-  protected async createEdgeBetweenNodes(sourceId: string, targetId: string): Promise<boolean> { return createEdgeBetweenNodesHandler(this, sourceId, targetId); }
+  protected async createEdgeBetweenNodes(
+    sourceId: string,
+    targetId: string,
+    routeKey?: string | null,
+  ): Promise<boolean> {
+    return createEdgeBetweenNodesHandler(this, sourceId, targetId, routeKey);
+  }
 
   protected clearGraph(): void {
     this.s.removeAdderHelper();
@@ -712,6 +740,7 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
     this.s.removeAdderHelper();
     this.s.cy?.$(':selected').unselect();
     this.s.addSourceNodeIdForMenu = null;
+    this.s.addSourceRouteKeyForMenu = null;
     this.s.clearNodeEditorDraft();
   }
 
@@ -723,8 +752,15 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
   protected isAdderNode(node: NodeSingular): boolean { return node.id() === this.s.adderNodeId || node.data('helper') === 'adder'; }
   protected getNodeById(nodeId: string): NodeSingular | null { return getNodeByIdHandler(this, nodeId); }
   protected getAdderSourceNode(): NodeSingular | null { return getAdderSourceNodeHandler(this); }
+  protected getAdderContextFromNode(adderNode: NodeSingular): { sourceNode: NodeSingular | null; routeKey: string | null } {
+    return getAdderContextFromNodeHandler(this, adderNode);
+  }
   protected getNodeSourceForMenuCreation(): NodeSingular | null { return getNodeSourceForMenuCreationHandler(this); }
-  protected openAddMenuFromAdder(): void { openAddMenuFromAdderHandler(this); }
+  protected getRouteKeyForMenuCreation(): string | null { return getRouteKeyForMenuCreationHandler(this); }
+  protected openAddMenuFromAdder(adderNode: NodeSingular): void {
+    this.s.adderMenuSourceNode = adderNode;
+    openAddMenuFromAdderHandler(this);
+  }
   protected openNodeEditor(node: NodeSingular): void { openNodeEditorHandler(this, node); }
   protected clearNodeEditorDraft(): void { clearNodeEditorDraftHandler(this); }
   protected loadVisualDraftFromNodeConfig(nodeType: string, configRaw: string): void { loadVisualDraftFromNodeConfigHandler(this, nodeType, configRaw); }
@@ -738,6 +774,12 @@ export class WorkflowExtractedEditorRuntimeMethodsBase {
     headers: Array<{ name: string; value: string }>,
   ): Array<{ name: string; value: string }> {
     return cloneHttpHeadersValue(headers);
+  }
+
+  protected cloneJavascriptInputs(
+    rows: Array<{ id: string; name: string; value: string }>,
+  ): Array<{ id: string; name: string; value: string }> {
+    return cloneJavascriptInputsValue(rows);
   }
 
   protected cloneJsonFields(fields: JsonFieldDraft[]): JsonFieldDraft[] { return cloneJsonFieldsValue(fields); }

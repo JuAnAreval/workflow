@@ -13,6 +13,7 @@ import {
   removePrevTokenAtIndex,
   resolveHttpTestPayloadFromConfig,
 } from './workflow-runtime.utils';
+import { refreshOutgoingEdgeLabels } from './workflow-graph-runtime.utils';
 import {
   readValueByVariableTargetFieldValue,
   writeValueByVariableTargetFieldHandler,
@@ -30,6 +31,7 @@ export function removeTokenByFieldHandler(
     | 'userFirstName'
     | 'userLastName'
     | 'userEmail'
+    | 'userPassword'
     | 'httpUrl'
     | 'httpBody'
     | 'httpResponse',
@@ -99,6 +101,10 @@ export async function saveSelectedNodeChangesHandler(ctx: any): Promise<void> {
     return;
   }
 
+  if (typeof ctx.pruneUnavailableVariableTokensInDraft === 'function') {
+    ctx.pruneUnavailableVariableTokensInDraft();
+  }
+
   const nextConfig = ctx.composeNodeConfigToSave();
   if (nextConfig === null) {
     return;
@@ -120,10 +126,16 @@ export async function saveSelectedNodeChangesHandler(ctx: any): Promise<void> {
       ...nodeToEdit.data(),
       ...buildNodeVisualData(nextLabel, nextType, nextConfig),
     });
+    refreshOutgoingEdgeLabels(
+      ctx.cy,
+      nodeToEdit.id(),
+      { type: nextType, config: nextConfig },
+    );
 
     ctx.editNodeType = nextType;
     ctx.editNodeConfig = nextConfig;
     ctx.openNodeEditor(nodeToEdit);
+    ctx.showAdderHelper(nodeToEdit);
     ctx.statusMessage = `Nodo "${nextLabel}" actualizado.`;
   } catch {
     ctx.statusMessage = 'No se pudo actualizar el nodo.';
@@ -176,11 +188,18 @@ export function dismissHttpTestFeedbackHandler(ctx: any): void {
 
 export function showAddMenuHandler(ctx: any): void {
   const selectedNode = ctx.editNodeId ? ctx.getNodeById(ctx.editNodeId) : null;
+  const selectedNodeType = String(selectedNode?.data('type') ?? '').trim();
+  const isBranchingSource =
+    selectedNodeType === 'decision_if' || selectedNodeType === 'decision_switch';
   ctx.showOnlyTriggerTemplatesInMenu = false;
   ctx.templateSearch = '';
-  ctx.addSourceNodeIdForMenu = selectedNode?.id() ?? null;
+  ctx.addSourceNodeIdForMenu = isBranchingSource ? null : selectedNode?.id() ?? null;
+  ctx.addSourceRouteKeyForMenu = null;
   ctx.rightMenuMode = 'add';
   ctx.isRightMenuOpen = true;
+  if (isBranchingSource) {
+    ctx.statusMessage = 'Para conectar desde If/Switch usa el boton + de la salida.';
+  }
   ctx.requestUiRefresh();
 }
 

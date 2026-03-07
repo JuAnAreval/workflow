@@ -1,4 +1,4 @@
-import { NodeSingular } from 'cytoscape';
+ï»¿import { NodeSingular } from 'cytoscape';
 import {
   didAdderNodeMove,
   resolveAdderDropTargetNode,
@@ -15,7 +15,7 @@ export function handleCanvasNodeClickHandler(
       return;
     }
 
-    ctx.openAddMenuFromAdder();
+    ctx.openAddMenuFromAdder(node);
     ctx.requestUiRefresh();
     return;
   }
@@ -40,7 +40,8 @@ export function handleCanvasNodeDragFreeHandler(
       ctx.suppressNextAdderTap = true;
       void handleAdderDropHandler(ctx, node);
     } else {
-      const sourceNode = ctx.getAdderSourceNode();
+      const adderContext = ctx.getAdderContextFromNode(node);
+      const sourceNode = adderContext.sourceNode;
       if (sourceNode) {
         ctx.showAdderHelper(sourceNode);
       }
@@ -53,7 +54,7 @@ export function handleCanvasNodeDragFreeHandler(
     node,
     patchNode: (id, payload) => ctx.workflowNodeService.Patch(id, payload),
     onError: () => {
-      ctx.statusMessage = 'No se pudo guardar la posición del nodo.';
+      ctx.statusMessage = 'No se pudo guardar la posicion del nodo.';
     },
   });
   ctx.removeAdderHelper();
@@ -81,7 +82,33 @@ export async function handleNodeTapForConnectionHandler(
     return;
   }
 
+  const nodeType = String(node.data('type') ?? '').trim();
+  const isBranchingNode =
+    nodeType === 'decision_if' || nodeType === 'decision_switch';
+
   if (!ctx.pendingSourceNodeId) {
+    if (isBranchingNode) {
+      ctx.connectionHint =
+        'If/Switch: usa el boton + de la salida para elegir la rama.';
+      return;
+    }
+
+    const hasOutgoingEdge = ctx.cy
+      ? ctx.cy
+          .edges()
+          .toArray()
+          .some(
+            (edge: any) =>
+              edge.data('helper') !== 'adder' &&
+              edge.data('source') === node.id(),
+          )
+      : false;
+    if (hasOutgoingEdge) {
+      ctx.connectionHint =
+        'Ese nodo ya tiene salida. Elimina la conexion actual para crear otra.';
+      return;
+    }
+
     ctx.pendingSourceNodeId = node.id();
     ctx.connectionHint = `Origen: ${node.id()} | selecciona destino.`;
     return;
@@ -96,7 +123,7 @@ export async function handleNodeTapForConnectionHandler(
   const targetId = node.id();
 
   if (ctx.cy?.$(`edge[source = "${sourceId}"][target = "${targetId}"]`).length) {
-    ctx.connectionHint = 'Esa conexión ya existe.';
+    ctx.connectionHint = 'Esa conexion ya existe.';
     ctx.pendingSourceNodeId = null;
     return;
   }
@@ -104,13 +131,13 @@ export async function handleNodeTapForConnectionHandler(
   try {
     const wasConnected = await ctx.createEdgeBetweenNodes(sourceId, targetId);
     if (!wasConnected) {
-      ctx.connectionHint = 'Esa conexion ya existe.';
+      ctx.connectionHint = 'Esa conexion ya existe o requiere salida especifica.';
       return;
     }
-    ctx.connectionHint = 'Conexión creada.';
+    ctx.connectionHint = 'Conexion creada.';
     ctx.statusMessage = `Conectado ${sourceId} -> ${targetId}`;
   } catch {
-    ctx.connectionHint = 'No se pudo crear la conexión en backend.';
+    ctx.connectionHint = 'No se pudo crear la conexion en backend.';
   } finally {
     ctx.pendingSourceNodeId = null;
   }
@@ -120,7 +147,8 @@ export async function handleAdderDropHandler(
   ctx: any,
   adderNode: NodeSingular,
 ): Promise<void> {
-  const sourceNode = ctx.getAdderSourceNode();
+  const adderContext = ctx.getAdderContextFromNode(adderNode);
+  const sourceNode = adderContext.sourceNode;
   if (!sourceNode) {
     ctx.removeAdderHelper();
     ctx.requestUiRefresh();
@@ -145,9 +173,10 @@ export async function handleAdderDropHandler(
     const wasConnected = await ctx.createEdgeBetweenNodes(
       sourceNode.id(),
       targetNode.id(),
+      adderContext.routeKey,
     );
     if (!wasConnected) {
-      ctx.connectionHint = 'Esa conexion ya existe.';
+      ctx.connectionHint = 'Esa salida ya tiene conexion.';
     } else {
       ctx.connectionHint = 'Conexion creada.';
       ctx.statusMessage = `Conectado ${sourceNode.id()} -> ${targetNode.id()}`;

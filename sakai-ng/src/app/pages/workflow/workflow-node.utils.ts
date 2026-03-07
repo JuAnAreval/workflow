@@ -58,8 +58,14 @@ function resolveNodeSubtitle(type: string): string {
   if (normalized === 'action_http_request') {
     return 'Peticion HTTP';
   }
-  if (normalized === 'decision_condition') {
-    return 'Condicion';
+  if (normalized === 'action_javascript_code') {
+    return 'JavaScript';
+  }
+  if (normalized === 'decision_if') {
+    return 'If';
+  }
+  if (normalized === 'decision_switch') {
+    return 'Switch';
   }
   if (normalized === 'success_end') {
     return 'Fin';
@@ -83,11 +89,16 @@ function resolveNodeSubtitle(type: string): string {
 
 export function buildNodeDisplayLabel(label: string, type: string): string {
   const trimmed = label.trim();
-  if (!trimmed) {
-    return '';
+  if (trimmed) {
+    return trimmed;
   }
-  void type;
-  return trimmed;
+
+  const normalizedType = type.trim().toLowerCase();
+  if (normalizedType === 'decision_if' || normalizedType === 'decision_switch') {
+    return resolveNodeSubtitle(type);
+  }
+
+  return '';
 }
 
 export function buildNodeVisualData(

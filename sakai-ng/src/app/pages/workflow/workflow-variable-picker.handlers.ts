@@ -62,21 +62,45 @@ export function closeVariablePickerDialogHandler(ctx: any): void {
   ctx.variablePickerVariables = [];
   ctx.variablePickerGlobalEntries = [];
   ctx.variablePickerOriginGroups = [];
+  if (typeof ctx.clearDecisionRuleOperandTarget === 'function') {
+    ctx.clearDecisionRuleOperandTarget();
+  }
+  if (typeof ctx.clearJavascriptInputValueTarget === 'function') {
+    ctx.clearJavascriptInputValueTarget();
+  }
 }
 
 export function applyVariableFromPickerHandler(
   ctx: any,
   variable: VariablePickerEntry,
 ): void {
-  const targetField = ctx.variablePickerTargetField;
-  if (!targetField) {
-    return;
-  }
-
   const tokenPath = String(variable?.tokenPath ?? '').trim();
   if (!tokenPath) {
     ctx.statusMessage = 'La variable seleccionada no es valida.';
     ctx.requestUiRefresh();
+    return;
+  }
+
+  if (
+    typeof ctx.applyVariableTokenToDecisionOperand === 'function' &&
+    ctx.applyVariableTokenToDecisionOperand(tokenPath)
+  ) {
+    closeVariablePickerDialogHandler(ctx);
+    ctx.requestUiRefresh();
+    return;
+  }
+
+  if (
+    typeof ctx.applyVariableTokenToJavascriptInput === 'function' &&
+    ctx.applyVariableTokenToJavascriptInput(tokenPath)
+  ) {
+    closeVariablePickerDialogHandler(ctx);
+    ctx.requestUiRefresh();
+    return;
+  }
+
+  const targetField = ctx.variablePickerTargetField;
+  if (!targetField) {
     return;
   }
 
@@ -110,6 +134,24 @@ export function applyGlobalVariableCandidateFromPickerHandler(
   }
 
   if (entry.globalTokenPath?.trim()) {
+    if (
+      typeof ctx.applyVariableTokenToDecisionOperand === 'function' &&
+      ctx.applyVariableTokenToDecisionOperand(entry.globalTokenPath.trim())
+    ) {
+      closeVariablePickerDialogHandler(ctx);
+      ctx.requestUiRefresh();
+      return;
+    }
+
+    if (
+      typeof ctx.applyVariableTokenToJavascriptInput === 'function' &&
+      ctx.applyVariableTokenToJavascriptInput(entry.globalTokenPath.trim())
+    ) {
+      closeVariablePickerDialogHandler(ctx);
+      ctx.requestUiRefresh();
+      return;
+    }
+
     const targetField = ctx.variablePickerTargetField;
     if (!targetField) {
       return;

@@ -12,6 +12,8 @@ import {
 
   ValidateNested,
   IsNotEmptyObject,
+  IsOptional,
+  IsString,
 } from 'class-validator';
 
 import {
@@ -46,6 +48,15 @@ export class CreateWorkflowEdgeDto {
   @Type(() => WorkflowDto)
   @IsNotEmptyObject()
   workflow: WorkflowDto;
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    type: String,
+  })
+  @IsOptional()
+  @IsString()
+  routeKey?: string | null;
 
   // Don't forget to use the class-validator decorators in the DTO properties.
 }

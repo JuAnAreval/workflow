@@ -3,7 +3,7 @@ import { NodeSingular } from 'cytoscape';
 import {
   JsonFieldDraft,
 } from './workflow-runtime.utils';
-import { NodeKind, WorkflowEdgeModel } from './workflow.types';
+import { JavascriptInputDraft, NodeKind, WorkflowEdgeModel } from './workflow.types';
 import { resolveNodeKindFromData } from './workflow-node.utils';
 import {
   buildNodeEditorClearState,
@@ -15,7 +15,7 @@ import {
 } from './workflow-graph-editor.utils';
 import {
   removeAdderHelperFromCanvas,
-  resolveAdderSourceNode,
+  resolveAdderHelperContext,
   showAdderHelperOnCanvas,
 } from './workflow-canvas.utils';
 import { addEdgeToGraph as addEdgeToGraphValue } from './workflow-graph-runtime.utils';
@@ -24,28 +24,106 @@ export async function createEdgeBetweenNodesHandler(
   ctx: any,
   sourceId: string,
   targetId: string,
+  routeKey?: string | null,
 ): Promise<boolean> {
   if (!ctx.activeWorkflowId) {
     return false;
   }
 
-  if (ctx.cy?.$(`edge[source = "${sourceId}"][target = "${targetId}"]`).length) {
+  const normalizedRouteKey =
+    typeof routeKey === 'string' && routeKey.trim() ? routeKey.trim() : null;
+  const sourceNode = ctx.getNodeById(sourceId);
+  const sourceNodeType = String(sourceNode?.data('type') ?? '').trim();
+  const isBranchingSource =
+    sourceNodeType === 'decision_if' || sourceNodeType === 'decision_switch';
+  if (isBranchingSource && !normalizedRouteKey) {
+    ctx.statusMessage =
+      'Selecciona una salida del nodo If/Switch usando el boton +.';
+    return false;
+  }
+  if (!isBranchingSource) {
+    const hasOutgoingEdge = ctx.cy
+      ? ctx.cy
+          .edges()
+          .toArray()
+          .some(
+            (edge: any) =>
+              edge.data('helper') !== 'adder' &&
+              edge.data('source') === sourceId,
+          )
+      : false;
+    if (hasOutgoingEdge) {
+      ctx.statusMessage =
+        'Este nodo ya tiene una salida. Elimina la conexion actual para crear otra.';
+      return false;
+    }
+  }
+
+  if (normalizedRouteKey) {
+    const hasRouteEdge = ctx.cy
+      ? ctx.cy
+          .edges()
+          .toArray()
+          .some(
+            (edge: any) =>
+              edge.data('helper') !== 'adder' &&
+              edge.data('source') === sourceId &&
+              String(edge.data('routeKey') ?? '').trim() === normalizedRouteKey,
+          )
+      : false;
+    if (hasRouteEdge) {
+      return false;
+    }
+  } else if (
+    ctx.cy?.$(`edge[source = "${sourceId}"][target = "${targetId}"]`).length
+  ) {
     return false;
   }
 
   ctx.isSaving = true;
   try {
-    const createdEdge = (await firstValueFrom(
-      ctx.workflowEdgeService.Post({
-        workflow: { id: ctx.activeWorkflowId },
-        fromNode: { id: sourceId },
-        toNode: { id: targetId },
-      }),
-    )) as WorkflowEdgeModel;
+    const payload: Record<string, unknown> = {
+      workflow: { id: ctx.activeWorkflowId },
+      fromNode: { id: sourceId },
+      toNode: { id: targetId },
+    };
+    if (normalizedRouteKey) {
+      payload['routeKey'] = normalizedRouteKey;
+    }
 
-    const sourceNode = ctx.getNodeById(createdEdge.fromNode?.id ?? '');
-    const sourceKind = ctx.resolveNodeKind(sourceNode);
-    addEdgeToGraphValue(ctx.cy, createdEdge, sourceKind);
+    const createdEdge = (await firstValueFrom(
+      ctx.workflowEdgeService.Post(payload),
+    )) as WorkflowEdgeModel;
+    const createdRouteKey =
+      typeof createdEdge.routeKey === 'string' && createdEdge.routeKey.trim()
+        ? createdEdge.routeKey.trim()
+        : null;
+    if (normalizedRouteKey && createdRouteKey !== normalizedRouteKey) {
+      if (createdEdge.id?.trim()) {
+        try {
+          await firstValueFrom(ctx.workflowEdgeService.Delete(createdEdge.id));
+        } catch {
+          // Best-effort cleanup; keep warning visible for manual cleanup if needed.
+        }
+      }
+      ctx.statusMessage =
+        'El backend no guardo la rama seleccionada (routeKey). Reinicia API y aplica migraciones.';
+      return false;
+    }
+
+    const createdSourceNode = ctx.getNodeById(createdEdge.fromNode?.id ?? '');
+    const sourceKind = ctx.resolveNodeKind(createdSourceNode ?? sourceNode);
+    addEdgeToGraphValue(
+      ctx.cy,
+      createdEdge,
+      sourceKind,
+      createdSourceNode
+        ? {
+            type: String(createdSourceNode.data('type') ?? ''),
+            config: String(createdSourceNode.data('config') ?? ''),
+          }
+        : null,
+    );
     return true;
   } finally {
     ctx.isSaving = false;
@@ -71,7 +149,32 @@ export function getNodeByIdHandler(ctx: any, nodeId: string): NodeSingular | nul
 }
 
 export function getAdderSourceNodeHandler(ctx: any): NodeSingular | null {
-  return resolveAdderSourceNode(ctx.cy, ctx.adderEdgeId);
+  const helperNodes = ctx.cy
+    ?.nodes('[helper = "adder"]')
+    .toArray()
+    .map((node: any) => node as NodeSingular);
+  const helperNode = helperNodes?.[0] ?? null;
+  if (!helperNode) {
+    return null;
+  }
+
+  return resolveAdderHelperContext(ctx.cy, helperNode).sourceNode;
+}
+
+export function getAdderContextFromNodeHandler(
+  ctx: any,
+  adderNode: NodeSingular,
+): { sourceNode: NodeSingular | null; routeKey: string | null } {
+  return resolveAdderHelperContext(ctx.cy, adderNode);
+}
+
+export function getRouteKeyForMenuCreationHandler(ctx: any): string | null {
+  if (typeof ctx.addSourceRouteKeyForMenu !== 'string') {
+    return null;
+  }
+
+  const normalized = ctx.addSourceRouteKeyForMenu.trim();
+  return normalized || null;
 }
 
 export function getActiveEditorNodeHandler(ctx: any): NodeSingular | null {
@@ -104,13 +207,21 @@ export function getNodeSourceForMenuCreationHandler(ctx: any): NodeSingular | nu
 }
 
 export function openAddMenuFromAdderHandler(ctx: any): void {
-  const sourceNode = ctx.getAdderSourceNode();
+  const adderNode = ctx.adderMenuSourceNode;
+  ctx.adderMenuSourceNode = null;
+  if (!adderNode || ctx.isAdderNode(adderNode) === false) {
+    return;
+  }
+
+  const adderContext = ctx.getAdderContextFromNode(adderNode);
+  const sourceNode = adderContext.sourceNode;
   if (!sourceNode || !sourceNode.id()) {
     return;
   }
 
   ctx.suppressNextAdderTap = false;
   ctx.addSourceNodeIdForMenu = sourceNode.id();
+  ctx.addSourceRouteKeyForMenu = adderContext.routeKey;
   ctx.showOnlyTriggerTemplatesInMenu = false;
   ctx.templateSearch = '';
   ctx.rightMenuMode = 'add';
@@ -128,6 +239,10 @@ export function openNodeEditorHandler(ctx: any, node: NodeSingular): void {
   Object.assign(ctx, state);
   ctx.clearHttpTestFeedback();
   ctx.loadVisualDraftFromNodeConfig(ctx.editNodeType, ctx.editNodeConfig);
+  if (typeof ctx.pruneUnavailableVariableTokensInDraft === 'function') {
+    ctx.pruneUnavailableVariableTokensInDraft();
+  }
+  ctx.requestUiRefresh();
 }
 
 export function clearNodeEditorDraftHandler(ctx: any): void {
@@ -136,9 +251,12 @@ export function clearNodeEditorDraftHandler(ctx: any): void {
     buildNodeEditorClearState(
       (fields) => cloneJsonFieldsValue(fields),
       (headers) => cloneHttpHeadersValue(headers),
+      (rows) => cloneJavascriptInputsValue(rows),
     ),
   );
   ctx.closeVariablePickerDialog();
+  ctx.javascriptInputValueTargetId = null;
+  ctx.javascriptInputFocusedId = '';
   ctx.clearHttpTestFeedback();
 }
 
@@ -153,9 +271,16 @@ export function loadVisualDraftFromNodeConfigHandler(
     conditionOperatorOptions: ctx.conditionOperatorOptions,
     cloneJsonFields: (fields) => cloneJsonFieldsValue(fields),
     cloneHttpHeaders: (headers) => cloneHttpHeadersValue(headers),
+    cloneJavascriptInputs: (rows) => cloneJavascriptInputsValue(rows),
     generateWebhookToken: () => generateWebhookTokenValue(),
   });
   Object.assign(ctx, state.patch);
+  if (
+    nodeType === 'decision_condition' &&
+    typeof ctx.normalizeConditionTreeDraft === 'function'
+  ) {
+    ctx.normalizeConditionTreeDraft();
+  }
 
   if (state.actionHttpHeaders) {
     ctx.actionHttpHeaders = state.actionHttpHeaders;
@@ -163,8 +288,17 @@ export function loadVisualDraftFromNodeConfigHandler(
   if (state.actionFormFields) {
     ctx.actionFormFields = state.actionFormFields;
   }
+  if (state.actionJavascriptInputs) {
+    ctx.actionJavascriptInputs = state.actionJavascriptInputs;
+  }
   if (state.triggerWebhookToken) {
     ctx.triggerWebhookToken = state.triggerWebhookToken;
+  }
+  if (
+    nodeType === 'action_javascript_code' &&
+    typeof ctx.syncJavascriptManagedInputsIntoCode === 'function'
+  ) {
+    ctx.syncJavascriptManagedInputsIntoCode();
   }
 }
 
@@ -177,8 +311,6 @@ export function showAdderHelperHandler(ctx: any, sourceNode: NodeSingular): void
     sourceNode,
     (node) => ctx.isAdderNode(node),
     {
-      adderNodeId: ctx.adderNodeId,
-      adderEdgeId: ctx.adderEdgeId,
       adderOffsetY: ctx.adderOffsetY,
     },
   );
@@ -187,7 +319,8 @@ export function showAdderHelperHandler(ctx: any, sourceNode: NodeSingular): void
 export function removeAdderHelperHandler(ctx: any): void {
   ctx.adderGrabStartPosition = null;
   ctx.suppressNextAdderTap = false;
-  removeAdderHelperFromCanvas(ctx.cy, ctx.adderNodeId, ctx.adderEdgeId);
+  ctx.adderMenuSourceNode = null;
+  removeAdderHelperFromCanvas(ctx.cy);
 }
 
 export function syncTriggerPresenceHandler(ctx: any): void {
@@ -208,6 +341,10 @@ export function requestUiRefreshHandler(ctx: any): void {
 export function isEditableTargetValue(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
+  }
+
+  if (target.closest('.monaco-editor')) {
+    return true;
   }
 
   const tagName = target.tagName.toUpperCase();
@@ -240,6 +377,23 @@ export function cloneJsonFieldsValue(fields: JsonFieldDraft[]): JsonFieldDraft[]
   return fields.map((field) => ({
     name: typeof field?.name === 'string' ? field.name : '',
     value: typeof field?.value === 'string' ? field.value : '',
+  }));
+}
+
+export function cloneJavascriptInputsValue(
+  rows: JavascriptInputDraft[],
+): JavascriptInputDraft[] {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return rows.map((row, index) => ({
+    id:
+      typeof row?.id === 'string' && row.id.trim()
+        ? row.id.trim()
+        : `js-input-${index + 1}`,
+    name: typeof row?.name === 'string' ? row.name : '',
+    value: typeof row?.value === 'string' ? row.value : '',
   }));
 }
 

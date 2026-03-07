@@ -23,6 +23,7 @@
         "chart.js": "4.4.2",
         "cytoscape": "^3.33.1",
         "cytoscape-node-html-label": "^1.2.2",
+        "monaco-editor": "^0.55.1",
         "primeclt": "^0.1.5",
         "primeicons": "^7.0.0",
         "primeng": "^21.0.2",

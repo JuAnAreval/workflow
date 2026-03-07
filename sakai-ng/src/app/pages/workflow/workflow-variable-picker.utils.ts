@@ -15,6 +15,12 @@ export type NormalizedInputField =
   | 'actionUserFirstName'
   | 'actionUserLastName'
   | 'actionUserEmail'
+  | 'actionUserPassword'
+  | 'actionUserRoleId'
+  | 'actionUserStatusId'
+  | 'actionJavascriptCode'
+  | 'actionJavascriptResultKey'
+  | 'actionJavascriptResponse'
   | 'actionHttpUrl'
   | 'actionHttpBody'
   | 'actionHttpResponse';
@@ -27,6 +33,7 @@ export type VariableTargetProperty =
 export type WorkflowVariableSourceType =
   | 'form_json'
   | 'http_json'
+  | 'javascript_json'
   | 'webhook_json';
 
 export type VariablePickerEntry = {
@@ -68,6 +75,7 @@ export const VARIABLE_TARGET_PROPERTY_MAP: Record<
   userFirstName: 'actionUserFirstName',
   userLastName: 'actionUserLastName',
   userEmail: 'actionUserEmail',
+  userPassword: 'actionUserPassword',
   httpUrl: 'actionHttpUrl',
   httpBody: 'actionHttpBody',
   httpResponse: 'actionHttpResponse',
@@ -211,9 +219,7 @@ export function buildVariablePickerCollections(
         candidates: orderedCandidates,
         isAmbiguous: orderedCandidates.length > 1,
         globalTokenPath:
-          orderedCandidates.length === 1 && key && !key.includes('.')
-            ? `global.${key}`
-            : null,
+          orderedCandidates.length === 1 && key ? `global.${key}` : null,
       };
     })
     .sort((left, right) => left.key.localeCompare(right.key));
@@ -221,7 +227,8 @@ export function buildVariablePickerCollections(
   const originOrder: Record<WorkflowVariableSourceType, number> = {
     webhook_json: 1,
     http_json: 2,
-    form_json: 3,
+    javascript_json: 3,
+    form_json: 4,
   };
 
   const originGroups = Array.from(originMap.values())
@@ -342,6 +349,9 @@ function resolveVariableSourceTypeFromNodeType(
   if (nodeType === 'action_http_request') {
     return 'http_json';
   }
+  if (nodeType === 'action_javascript_code') {
+    return 'javascript_json';
+  }
   if (isWebhookTriggerType(nodeType)) {
     return 'webhook_json';
   }
@@ -356,6 +366,9 @@ function resolveVariableSourceTypeLabel(sourceType: WorkflowVariableSourceType):
   if (sourceType === 'http_json') {
     return 'HTTP';
   }
+  if (sourceType === 'javascript_json') {
+    return 'JavaScript';
+  }
 
   return 'Webhook';
 }
@@ -368,6 +381,9 @@ function resolveVariableSourceTypeDrawerLabel(
   }
   if (sourceType === 'http_json') {
     return 'peticion http';
+  }
+  if (sourceType === 'javascript_json') {
+    return 'javascript';
   }
 
   return 'formulario';
@@ -393,6 +409,8 @@ function resolveVariableSourceAlias(
       ? 'form'
       : sourceType === 'http_json'
         ? 'http'
+        : sourceType === 'javascript_json'
+          ? 'js'
         : 'webhook';
   const baseLabel =
     normalizeVariableAliasSegment(nodeLabel) ||

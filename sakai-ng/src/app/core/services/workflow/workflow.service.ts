@@ -35,6 +35,7 @@ export type WorkflowSavedJsonRecord = {
   sourceType:
     | 'form_json'
     | 'http_json'
+    | 'javascript_json'
     | 'webhook_json'
     | 'form_data'
     | 'http_response'

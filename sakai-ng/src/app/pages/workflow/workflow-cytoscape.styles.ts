@@ -12,7 +12,7 @@ export const WORKFLOW_CYTOSCAPE_STYLE: cytoscape.StylesheetJson = [
       width: BASE_NODE_WIDTH,
       height: BASE_NODE_HEIGHT,
       color: '#24374b',
-      'font-size': 16,
+      'font-size': 15,
       'font-weight': 700,
       'font-family': 'Segoe UI, Arial, sans-serif',
       'text-valign': 'center',
@@ -132,6 +132,7 @@ export const WORKFLOW_CYTOSCAPE_STYLE: cytoscape.StylesheetJson = [
   {
     selector: 'edge',
     style: {
+      label: 'data(label)',
       width: 3,
       'curve-style': 'bezier',
       'control-point-step-size': 66,
@@ -148,6 +149,17 @@ export const WORKFLOW_CYTOSCAPE_STYLE: cytoscape.StylesheetJson = [
       'arrow-scale': 1.45,
       'line-cap': 'butt',
       'overlay-opacity': 0,
+      color: '#355474',
+      'font-size': 10,
+      'font-weight': 700,
+      'text-background-color': '#ffffff',
+      'text-background-opacity': 0.92,
+      'text-background-padding': '2px',
+      'text-border-color': '#d2dfed',
+      'text-border-width': 1,
+      'text-border-opacity': 0.9,
+      'text-rotation': 'autorotate',
+      'text-margin-y': -8,
       'transition-property':
         'line-color target-arrow-color line-style width line-dash-offset opacity',
       'transition-duration': 160,
@@ -195,6 +207,7 @@ export const WORKFLOW_CYTOSCAPE_STYLE: cytoscape.StylesheetJson = [
   {
     selector: 'edge[helper = "adder"]',
     style: {
+      label: 'data(label)',
       width: 1.7,
       'curve-style': 'straight',
       'line-style': 'dashed',
@@ -206,6 +219,14 @@ export const WORKFLOW_CYTOSCAPE_STYLE: cytoscape.StylesheetJson = [
       'line-outline-width': 0,
       'line-outline-color': '#000000',
       'line-opacity': 0.88,
+      color: '#4f6882',
+      'font-size': 16,
+      'font-weight': 700,
+      'text-background-color': '#ffffff',
+      'text-background-opacity': 0.95,
+      'text-background-padding': '2px',
+      'text-border-width': 0,
+      'text-margin-y': -14,
     },
   },
   {

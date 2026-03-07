@@ -18,7 +18,7 @@ import { EntityRelationalHelper } from '../../../../../utils/relational-entity-h
 @Entity({
   name: 'workflow_edge',
 })
-@Unique('UQ_workflow_edge_connection', ['workflowId', 'fromNodeId', 'toNodeId'])
+@Unique('UQ_workflow_edge_route', ['workflowId', 'fromNodeId', 'routeKey'])
 export class WorkflowEdgeEntity extends EntityRelationalHelper {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -43,6 +43,13 @@ export class WorkflowEdgeEntity extends EntityRelationalHelper {
     type: String,
   })
   workflowId: string;
+
+  @Index()
+  @Column({
+    nullable: true,
+    type: String,
+  })
+  routeKey?: string | null;
 
   @ManyToOne(
     () => WorkflowNodeEntity,

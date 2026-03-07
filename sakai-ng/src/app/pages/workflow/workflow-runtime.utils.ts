@@ -29,6 +29,7 @@ export type VariablePickerTargetField =
   | 'userFirstName'
   | 'userLastName'
   | 'userEmail'
+  | 'userPassword'
   | 'httpUrl'
   | 'httpBody'
   | 'httpResponse';
@@ -545,7 +546,78 @@ export function resolveVariableKeysFromParentNodeConfig(
     return extractVariableKeysFromRecord(config['response']);
   }
 
+  if (parentType === 'action_javascript_code') {
+    const resultKeyRaw = config['resultKey'];
+    const resultKey =
+      typeof resultKeyRaw === 'string' ? resultKeyRaw.trim() : '';
+    const normalizedResultKey = resultKey || 'result';
+    const responseValueForPicker = resolveJavascriptResponseShapeForPicker(
+      config['response'],
+      normalizedResultKey,
+    );
+    const responseKeys = extractVariableKeysFromRecord(responseValueForPicker);
+    if (!responseKeys.length) {
+      return [normalizedResultKey];
+    }
+
+    const keys = new Set<string>([normalizedResultKey]);
+    for (const key of responseKeys) {
+      const normalizedKey = String(key ?? '').trim();
+      if (!normalizedKey) {
+        continue;
+      }
+
+      keys.add(`${normalizedResultKey}.${normalizedKey}`);
+    }
+
+    return Array.from(keys.values());
+  }
+
   return [];
+}
+
+function resolveJavascriptResponseShapeForPicker(
+  responseRaw: unknown,
+  resultKey: string,
+): unknown {
+  if (!isPlainObject(responseRaw)) {
+    return responseRaw;
+  }
+
+  const nestedResultValue = responseRaw[resultKey];
+  if (!isPlainObject(nestedResultValue) && !Array.isArray(nestedResultValue)) {
+    return responseRaw;
+  }
+
+  const normalizedResultKey = resultKey.trim().toLowerCase();
+  const topLevelKeys = Object.keys(responseRaw)
+    .map((key) => normalizeVariableRecordKeyForPicker(key))
+    .filter(
+      (key) => !!key && key.trim().toLowerCase() !== normalizedResultKey,
+    );
+  if (!topLevelKeys.length) {
+    return nestedResultValue;
+  }
+
+  const nestedTopLevelKeys = Array.isArray(nestedResultValue)
+    ? ['0']
+    : Object.keys(nestedResultValue)
+        .map((key) => normalizeVariableRecordKeyForPicker(key))
+        .filter((key) => !!key);
+  if (!nestedTopLevelKeys.length) {
+    return responseRaw;
+  }
+
+  const nestedTopLevelKeySet = new Set(
+    nestedTopLevelKeys.map((key) => key.toLowerCase()),
+  );
+  for (const topLevelKey of topLevelKeys) {
+    if (nestedTopLevelKeySet.has(topLevelKey.toLowerCase())) {
+      return nestedResultValue;
+    }
+  }
+
+  return responseRaw;
 }
 
 export function resolveHttpTestPayloadFromConfig(

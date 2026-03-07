@@ -1,6 +1,13 @@
 import {
+  ConditionGroupDraft,
+  ConditionLogicalOperator,
+  ConditionNodeDraft,
   ConditionOperator,
   ConditionOperatorOption,
+  ConditionRuleDraft,
+  DecisionLogicalOperator,
+  DecisionRuleDraft,
+  JavascriptInputDraft,
   WorkflowScheduleMode,
   WorkflowScheduleRecurringType,
   WorkflowTriggerEvent,
@@ -13,6 +20,8 @@ import {
   isTriggerType,
   isWebhookTriggerType,
 } from './workflow-trigger.utils';
+
+let conditionDraftSequence = 0;
 
 type TriggerToggles = {
   triggerOnCreated: boolean;
@@ -50,6 +59,9 @@ type UserFields = {
   actionUserFirstName: string;
   actionUserLastName: string;
   actionUserEmail: string;
+  actionUserPassword: string;
+  actionUserRoleId: string;
+  actionUserStatusId: string;
 };
 
 type JsonFieldDraft = {
@@ -80,12 +92,24 @@ type ConditionFields = {
   conditionField: string;
   conditionOperator: ConditionOperator;
   conditionValue: string;
+  conditionTree: ConditionGroupDraft;
+};
+
+type DecisionFields = {
+  decisionIfLogicalOperator: DecisionLogicalOperator;
+  decisionIfRules: DecisionRuleDraft[];
+  decisionSwitchCases: DecisionRuleDraft[];
+  actionJavascriptInputs: JavascriptInputDraft[];
+  actionJavascriptCode: string;
+  actionJavascriptResultKey: string;
+  actionJavascriptResponse: string;
 };
 
 export type ComposeNodeConfigInput = TriggerToggles &
   AssignmentFields &
   FormFields &
   ConditionFields &
+  DecisionFields &
   ProjectFields &
   TaskFields &
   UserFields &
@@ -146,24 +170,31 @@ export function composeNodeConfigToSave(
         };
       }
 
-      const parsedWebhookResponse = parseJsonTextInput(
-        input.triggerWebhookResponse,
-        'El response esperado del webhook debe tener formato JSON valido.',
-        {},
-      );
-      if (!parsedWebhookResponse.ok) {
-        return {
-          config: null,
-          errorMessage: parsedWebhookResponse.errorMessage,
-        };
+      const config: Record<string, unknown> = {
+        events: ['webhook'],
+        webhookToken,
+      };
+      const webhookResponseRaw = input.triggerWebhookResponse.trim();
+      if (webhookResponseRaw) {
+        const parsedWebhookResponse = parseJsonTextInput(
+          webhookResponseRaw,
+          'El response esperado del webhook debe tener formato JSON valido.',
+          {},
+        );
+        if (!parsedWebhookResponse.ok) {
+          return {
+            config: null,
+            errorMessage:
+              parsedWebhookResponse.errorMessage ??
+              'El response esperado del webhook debe tener formato JSON valido.',
+          };
+        }
+
+        config['response'] = parsedWebhookResponse.value;
       }
 
       return {
-        config: JSON.stringify({
-          events: ['webhook'],
-          webhookToken,
-          response: parsedWebhookResponse.value,
-        }),
+        config: JSON.stringify(config),
         errorMessage: null,
       };
     }
@@ -192,22 +223,66 @@ export function composeNodeConfigToSave(
     };
   }
 
-  if (input.editNodeType === 'decision_condition') {
-    const field = input.conditionField.trim();
-    if (!field) {
+  if (input.editNodeType === 'decision_if') {
+    const parsedIfConfig = composeDecisionIfConfig(
+      input.decisionIfLogicalOperator,
+      input.decisionIfRules,
+    );
+    if (!parsedIfConfig.ok) {
       return {
         config: null,
-        errorMessage: 'Selecciona un campo para la condicion.',
+        errorMessage: parsedIfConfig.errorMessage,
       };
     }
 
     return {
-      config: JSON.stringify({
-        field,
-        operator: input.conditionOperator,
-        value: parseConditionInputValue(input.conditionValue.trim()),
-      }),
+      config: JSON.stringify(parsedIfConfig.value),
       errorMessage: null,
+    };
+  }
+
+  if (input.editNodeType === 'decision_switch') {
+    const parsedSwitchConfig = composeDecisionSwitchConfig(
+      input.decisionSwitchCases,
+    );
+    if (!parsedSwitchConfig.ok) {
+      return {
+        config: null,
+        errorMessage: parsedSwitchConfig.errorMessage,
+      };
+    }
+
+    return {
+      config: JSON.stringify(parsedSwitchConfig.value),
+      errorMessage: null,
+    };
+  }
+
+  if (input.editNodeType === 'action_javascript_code') {
+    const parsedJavascriptConfig = composeJavascriptActionConfig(
+      input.actionJavascriptInputs,
+      input.actionJavascriptCode,
+      input.actionJavascriptResultKey,
+      input.actionJavascriptResponse,
+    );
+    if (!parsedJavascriptConfig.ok) {
+      return {
+        config: null,
+        errorMessage: parsedJavascriptConfig.errorMessage,
+      };
+    }
+
+    return {
+      config: JSON.stringify(parsedJavascriptConfig.value),
+      errorMessage: null,
+    };
+  }
+
+  if (input.editNodeType === 'decision_condition') {
+    return {
+      config: null,
+      errorMessage:
+        'El nodo legacy "decision_condition" ya no es soportado. Reemplazalo por If o Switch.',
     };
   }
 
@@ -264,6 +339,7 @@ export function composeNodeConfigToSave(
     const firstName = input.actionUserFirstName.trim();
     const lastName = input.actionUserLastName.trim();
     const email = input.actionUserEmail.trim();
+    const password = input.actionUserPassword.trim();
 
     if (!firstName) {
       return {
@@ -283,7 +359,12 @@ export function composeNodeConfigToSave(
       firstName,
       lastName,
       email,
+      roleId: parsePositiveIntegerWithDefault(input.actionUserRoleId, 2),
+      statusId: parsePositiveIntegerWithDefault(input.actionUserStatusId, 1),
     };
+    if (password) {
+      config['password'] = password;
+    }
     const assignedUserId = parseAssignedUserId(input.actionAssignedUserId);
     if (assignedUserId !== null) {
       config['assignedUserId'] = assignedUserId;
@@ -351,26 +432,33 @@ export function composeNodeConfigToSave(
       };
     }
 
-    const parsedResponse = parseJsonTextInput(
-      input.actionHttpResponse,
-      'El response esperado debe tener formato JSON valido.',
-      {},
-    );
-    if (!parsedResponse.ok) {
-      return {
-        config: null,
-        errorMessage: parsedResponse.errorMessage,
-      };
+    const config: Record<string, unknown> = {
+      url,
+      method,
+      headers: parsedHeaders.headers,
+      body: parsedBody.value,
+    };
+    const responseRaw = input.actionHttpResponse.trim();
+    if (responseRaw) {
+      const parsedResponse = parseJsonTextInput(
+        responseRaw,
+        'El response esperado debe tener formato JSON valido.',
+        {},
+      );
+      if (!parsedResponse.ok) {
+        return {
+          config: null,
+          errorMessage:
+            parsedResponse.errorMessage ??
+            'El response esperado debe tener formato JSON valido.',
+        };
+      }
+
+      config['response'] = parsedResponse.value;
     }
 
     return {
-      config: JSON.stringify({
-        url,
-        method,
-        headers: parsedHeaders.headers,
-        body: parsedBody.value,
-        response: parsedResponse.value,
-      }),
+      config: JSON.stringify(config),
       errorMessage: null,
     };
   }
@@ -386,6 +474,7 @@ export type VisualDraftPatch = Partial<
     AssignmentFields &
     FormFields &
     ConditionFields &
+    DecisionFields &
     ProjectFields &
     TaskFields &
     UserFields &
@@ -435,15 +524,19 @@ export function resolveVisualDraftPatch(
     }
 
     if (isWebhookTriggerType(nodeType)) {
+      const webhookResponse = config['response'];
       return {
         triggerOnCreated: false,
         triggerOnUpdated: false,
         triggerOnDeleted: false,
         triggerWebhookToken: readWebhookTokenFromConfig(config),
-        triggerWebhookResponse: stringifyJsonValue(
-          config['response'] ?? {},
-          '{\n  "event": "created"\n}',
-        ),
+        triggerWebhookResponse:
+          webhookResponse === undefined
+            ? ''
+            : stringifyJsonValue(
+                webhookResponse,
+                '{\n  "event": "created"\n}',
+              ),
         triggerScheduleMode: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleMode,
         triggerScheduleEnabled: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleEnabled,
         triggerScheduleTimezone: WORKFLOW_EDITOR_DEFAULTS.triggerScheduleTimezone,
@@ -497,30 +590,55 @@ export function resolveVisualDraftPatch(
     };
   }
 
-  if (nodeType === 'decision_condition') {
+  if (nodeType === 'decision_if') {
     const patch: VisualDraftPatch = {};
-    const field = config['field'];
-    const operator = config['operator'];
-    const value = config['value'];
+    const logicalOperatorRaw = config['logicalOperator'];
+    patch.decisionIfLogicalOperator =
+      typeof logicalOperatorRaw === 'string' &&
+      logicalOperatorRaw.trim().toUpperCase() === 'OR'
+        ? 'OR'
+        : 'AND';
+    patch.decisionIfRules = parseDecisionRulesFromConfig(
+      config['rules'],
+      WORKFLOW_EDITOR_DEFAULTS.decisionIfRules,
+    );
+    return patch;
+  }
 
-    if (typeof field === 'string' && field.trim()) {
-      patch.conditionField = field;
-    }
+  if (nodeType === 'decision_switch') {
+    const patch: VisualDraftPatch = {};
+    patch.decisionSwitchCases = parseDecisionRulesFromConfig(
+      config['cases'],
+      WORKFLOW_EDITOR_DEFAULTS.decisionSwitchCases,
+    );
+    return patch;
+  }
 
-    if (typeof operator === 'string') {
-      const matchedOperator = conditionOperatorOptions.find(
-        (option) => option.value.toLowerCase() === operator.trim().toLowerCase(),
-      );
-      if (matchedOperator) {
-        patch.conditionOperator = matchedOperator.value;
-      }
-    }
+  if (nodeType === 'decision_condition') {
+    return {};
+  }
 
-    if (value !== undefined) {
-      patch.conditionValue =
-        typeof value === 'string' ? value : JSON.stringify(value);
-    }
-
+  if (nodeType === 'action_javascript_code') {
+    const patch: VisualDraftPatch = {};
+    patch.actionJavascriptInputs = parseJavascriptInputsFromConfig(
+      config['inputs'],
+      WORKFLOW_EDITOR_DEFAULTS.actionJavascriptInputs,
+    );
+    const code = config['code'];
+    patch.actionJavascriptCode =
+      typeof code === 'string' && code.trim()
+        ? code
+        : WORKFLOW_EDITOR_DEFAULTS.actionJavascriptCode;
+    const resultKey = config['resultKey'];
+    const response = config['response'];
+    patch.actionJavascriptResultKey =
+      typeof resultKey === 'string' && resultKey.trim()
+        ? resultKey.trim()
+        : WORKFLOW_EDITOR_DEFAULTS.actionJavascriptResultKey;
+    patch.actionJavascriptResponse = stringifyJsonValue(
+      response === undefined ? {} : response,
+      WORKFLOW_EDITOR_DEFAULTS.actionJavascriptResponse,
+    );
     return patch;
   }
 
@@ -565,6 +683,9 @@ export function resolveVisualDraftPatch(
     const firstName = config['firstName'];
     const lastName = config['lastName'];
     const email = config['email'];
+    const password = config['password'];
+    const roleId = config['roleId'];
+    const statusId = config['statusId'];
     const assignedUserId = readAssignedUserIdFromConfig(config);
 
     if (typeof firstName === 'string' && firstName.trim()) {
@@ -576,6 +697,14 @@ export function resolveVisualDraftPatch(
     if (typeof email === 'string' && email.trim()) {
       patch.actionUserEmail = email;
     }
+    if (typeof password === 'string') {
+      patch.actionUserPassword = password;
+    }
+    patch.actionUserRoleId = readPositiveIntegerFromConfigAsString(roleId, '2');
+    patch.actionUserStatusId = readPositiveIntegerFromConfigAsString(
+      statusId,
+      '1',
+    );
     patch.actionAssignedUserId = assignedUserId;
     return patch;
   }
@@ -614,14 +743,880 @@ export function resolveVisualDraftPatch(
       body === undefined ? {} : body,
       '{\n  "message": "Hola desde workflow"\n}',
     );
-    patch.actionHttpResponse = stringifyJsonValue(
-      response === undefined ? {} : response,
-      '{\n  "ok": true\n}',
-    );
+    patch.actionHttpResponse =
+      response === undefined
+        ? ''
+        : stringifyJsonValue(
+            response,
+            '{\n  "ok": true\n}',
+          );
     return patch;
   }
 
   return {};
+}
+
+function parseDecisionRulesFromConfig(
+  value: unknown,
+  fallback: DecisionRuleDraft[],
+): DecisionRuleDraft[] {
+  if (!Array.isArray(value)) {
+    return fallback.map((row) => ({
+      id: row.id,
+      left: row.left,
+      operator: row.operator,
+      right: row.right,
+    }));
+  }
+
+  const parsed = value
+    .map((entry, index) => {
+      if (!isPlainObject(entry)) {
+        return null;
+      }
+
+      const idRaw = entry['id'];
+      const leftRaw = entry['left'];
+      const operatorRaw = entry['operator'];
+      const rightRaw = entry['right'];
+
+      const id =
+        typeof idRaw === 'string' && idRaw.trim()
+          ? idRaw.trim()
+          : `rule-${index + 1}`;
+      const left = stringifyFieldValue(leftRaw).trim();
+      const operator = String(operatorRaw ?? '').trim() as ConditionOperator;
+      const right = stringifyFieldValue(rightRaw).trim();
+      if (!left || !operator) {
+        return null;
+      }
+
+      return {
+        id,
+        left,
+        operator,
+        right:
+          operator === 'isTrue' || operator === 'isFalse'
+            ? ''
+            : right,
+      } satisfies DecisionRuleDraft;
+    })
+    .filter((row): row is DecisionRuleDraft => !!row);
+
+  if (parsed.length) {
+    return parsed;
+  }
+
+  return fallback.map((row) => ({
+    id: row.id,
+    left: row.left,
+    operator: row.operator,
+    right: row.right,
+  }));
+}
+
+function parseJavascriptInputsFromConfig(
+  value: unknown,
+  fallback: JavascriptInputDraft[],
+): JavascriptInputDraft[] {
+  if (!Array.isArray(value)) {
+    return fallback.map((row, index) => ({
+      id: row.id || `js-input-${index + 1}`,
+      name: row.name,
+      value: row.value,
+    }));
+  }
+
+  const parsed = value
+    .map((entry, index) => {
+      if (!isPlainObject(entry)) {
+        return null;
+      }
+
+      const idRaw = entry['id'];
+      const nameRaw = entry['name'];
+      const valueRaw = entry['value'];
+      const id =
+        typeof idRaw === 'string' && idRaw.trim()
+          ? idRaw.trim()
+          : `js-input-${index + 1}`;
+      const name = typeof nameRaw === 'string' ? nameRaw : '';
+      const value = typeof valueRaw === 'string' ? valueRaw : '';
+
+      return {
+        id,
+        name,
+        value,
+      } satisfies JavascriptInputDraft;
+    })
+    .filter((row): row is JavascriptInputDraft => !!row);
+
+  if (parsed.length) {
+    return parsed;
+  }
+
+  return fallback.map((row, index) => ({
+    id: row.id || `js-input-${index + 1}`,
+    name: row.name,
+    value: row.value,
+  }));
+}
+
+function composeJavascriptActionConfig(
+  rows: JavascriptInputDraft[],
+  codeRaw: string,
+  resultKeyRaw: string,
+  responseRaw: string,
+): { ok: true; value: { inputs: JavascriptInputDraft[]; code: string; resultKey: string; response: unknown } } | { ok: false; errorMessage: string } {
+  const normalizedRows: JavascriptInputDraft[] = [];
+  const usedNames = new Set<string>();
+
+  const rowsToNormalize = Array.isArray(rows) ? rows : [];
+  for (let index = 0; index < rowsToNormalize.length; index += 1) {
+    const row = rowsToNormalize[index];
+    const id =
+      typeof row?.id === 'string' && row.id.trim()
+        ? row.id.trim()
+        : `js-input-${index + 1}`;
+    const name = typeof row?.name === 'string' ? row.name.trim() : '';
+    const value = typeof row?.value === 'string' ? row.value : '';
+
+    if (!name) {
+      return {
+        ok: false,
+        errorMessage: `Completa el nombre del valor ${index + 1}.`,
+      };
+    }
+
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
+      return {
+        ok: false,
+        errorMessage: `El nombre "${name}" no es valido. Usa letras, numeros, _ o $.`,
+      };
+    }
+
+    const normalizedName = name.toLowerCase();
+    if (usedNames.has(normalizedName)) {
+      return {
+        ok: false,
+        errorMessage: `El nombre "${name}" esta repetido.`,
+      };
+    }
+    usedNames.add(normalizedName);
+
+    normalizedRows.push({
+      id,
+      name,
+      value,
+    });
+  }
+
+  const code = typeof codeRaw === 'string' ? codeRaw.trim() : '';
+  const codeValidationMessage = validateJavascriptCodeDraft(code);
+  if (codeValidationMessage) {
+    return {
+      ok: false,
+      errorMessage: codeValidationMessage,
+    };
+  }
+
+  const resultKey = String(resultKeyRaw ?? '').trim() || 'result';
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(resultKey)) {
+    return {
+      ok: false,
+      errorMessage:
+        'La clave de resultado no es valida. Usa letras, numeros, _ o $.',
+    };
+  }
+
+  const parsedResponse = parseJsonTextInput(
+    responseRaw,
+    'El JSON de salida esperada debe tener formato JSON valido.',
+    {},
+  );
+  if (!parsedResponse.ok) {
+    return {
+      ok: false,
+      errorMessage:
+        parsedResponse.errorMessage ??
+        'El JSON de salida esperada debe tener formato JSON valido.',
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      inputs: normalizedRows,
+      code,
+      resultKey,
+      response: parsedResponse.value,
+    },
+  };
+}
+
+export function validateJavascriptCodeDraft(codeRaw: string): string | null {
+  const code = String(codeRaw ?? '').trim();
+  if (!code) {
+    return 'El codigo JavaScript no puede estar vacio.';
+  }
+
+  const normalizedCode = stripJavascriptLiteralsAndComments(code);
+  const returnMatches = normalizedCode.match(/\breturn\b/g);
+  if (!Array.isArray(returnMatches) || returnMatches.length < 1) {
+    return 'El codigo JavaScript debe incluir al menos un return.';
+  }
+
+  if (hasForbiddenJavascriptTokens(normalizedCode)) {
+    return 'El codigo JavaScript contiene tokens no permitidos.';
+  }
+
+  return null;
+}
+
+function hasForbiddenJavascriptTokens(code: string): boolean {
+  return /\b(require|process|globalThis|Function|eval|import|module|exports)\b/.test(
+    code,
+  );
+}
+
+function stripJavascriptLiteralsAndComments(code: string): string {
+  return code
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n\r]*/g, ' ')
+    .replace(/"(?:\\.|[^"\\])*"/g, '""')
+    .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/`(?:\\.|[^`\\])*`/g, '``');
+}
+
+type ConditionConfigRule = {
+  field: string;
+  operator: string;
+  value?: unknown;
+  valueSource?: 'literal' | 'field';
+  valuePath?: string;
+};
+
+type DecisionConfigRule = {
+  id: string;
+  left: unknown;
+  operator: string;
+  right: unknown;
+};
+
+type DecisionIfConfig = {
+  logicalOperator: DecisionLogicalOperator;
+  rules: DecisionConfigRule[];
+};
+
+type DecisionSwitchConfig = {
+  cases: DecisionConfigRule[];
+  defaultEnabled: boolean;
+};
+
+type ConditionConfigGroup = {
+  logicalOperator: ConditionLogicalOperator;
+  conditions: Array<ConditionConfigGroup | ConditionConfigRule>;
+};
+
+export function createConditionRuleDraft(
+  patch: Partial<ConditionRuleDraft> = {},
+): ConditionRuleDraft {
+  const id = patch.id?.trim() || generateConditionDraftId('rule');
+  const field = patch.field?.trim() || WORKFLOW_EDITOR_DEFAULTS.conditionField;
+  const operator =
+    patch.operator ?? WORKFLOW_EDITOR_DEFAULTS.conditionOperator;
+  const valueSource = patch.valueSource === 'field' ? 'field' : 'literal';
+  const valuePath = typeof patch.valuePath === 'string' ? patch.valuePath : '';
+  const value = typeof patch.value === 'string' ? patch.value : '';
+
+  return {
+    kind: 'rule',
+    id,
+    field,
+    operator,
+    valueSource,
+    value,
+    valuePath,
+  };
+}
+
+export function createConditionGroupDraft(
+  patch: Partial<ConditionGroupDraft> = {},
+): ConditionGroupDraft {
+  const id = patch.id?.trim() || generateConditionDraftId('group');
+  const logicalOperator = normalizeConditionLogicalOperator(
+    patch.logicalOperator,
+    'AND',
+  );
+  const rawConditions = Array.isArray(patch.conditions) ? patch.conditions : [];
+  const conditions = rawConditions
+    .map((entry) => cloneConditionNodeDraft(entry))
+    .filter((entry): entry is ConditionNodeDraft => !!entry);
+
+  return {
+    kind: 'group',
+    id,
+    logicalOperator,
+    conditions,
+  };
+}
+
+export function cloneConditionNodeDraft(
+  node: ConditionNodeDraft,
+): ConditionNodeDraft | null {
+  if (!node || typeof node !== 'object') {
+    return null;
+  }
+
+  if (node.kind === 'group') {
+    return cloneConditionGroupDraft(node);
+  }
+
+  if (node.kind === 'rule') {
+    return createConditionRuleDraft({
+      id: node.id,
+      field: node.field,
+      operator: node.operator,
+      valueSource: node.valueSource,
+      value: node.value,
+      valuePath: node.valuePath,
+    });
+  }
+
+  return null;
+}
+
+export function cloneConditionGroupDraft(
+  group: ConditionGroupDraft,
+): ConditionGroupDraft {
+  return createConditionGroupDraft({
+    id: group.id,
+    logicalOperator: group.logicalOperator,
+    conditions: group.conditions,
+  });
+}
+
+export function createDefaultConditionTreeDraft(): ConditionGroupDraft {
+  return createConditionGroupDraft({
+    logicalOperator: 'AND',
+    conditions: [
+      createConditionRuleDraft({
+        field: WORKFLOW_EDITOR_DEFAULTS.conditionField,
+        operator: WORKFLOW_EDITOR_DEFAULTS.conditionOperator,
+        value: WORKFLOW_EDITOR_DEFAULTS.conditionValue,
+      }),
+    ],
+  });
+}
+
+export function isConditionGroupDraftNode(
+  node: ConditionNodeDraft,
+): node is ConditionGroupDraft {
+  return !!node && node.kind === 'group';
+}
+
+export function isConditionRuleDraftNode(
+  node: ConditionNodeDraft,
+): node is ConditionRuleDraft {
+  return !!node && node.kind === 'rule';
+}
+
+export function findFirstConditionRule(
+  group: ConditionGroupDraft,
+): ConditionRuleDraft | null {
+  for (const entry of group.conditions) {
+    if (entry.kind === 'rule') {
+      return entry;
+    }
+    const nested = findFirstConditionRule(entry);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return null;
+}
+
+function composeDecisionIfConfig(
+  logicalOperatorRaw: DecisionLogicalOperator,
+  rules: DecisionRuleDraft[],
+): {
+  ok: boolean;
+  value: DecisionIfConfig | null;
+  errorMessage: string | null;
+} {
+  const logicalOperator =
+    logicalOperatorRaw === 'OR' || logicalOperatorRaw === 'AND'
+      ? logicalOperatorRaw
+      : 'AND';
+  const serializedRules = serializeDecisionRuleRows(rules, 'if');
+  if (!serializedRules.ok || !serializedRules.value) {
+    return {
+      ok: false,
+      value: null,
+      errorMessage: serializedRules.errorMessage,
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      logicalOperator,
+      rules: serializedRules.value,
+    },
+    errorMessage: null,
+  };
+}
+
+function composeDecisionSwitchConfig(
+  cases: DecisionRuleDraft[],
+): {
+  ok: boolean;
+  value: DecisionSwitchConfig | null;
+  errorMessage: string | null;
+} {
+  const serializedCases = serializeDecisionRuleRows(cases, 'switch');
+  if (!serializedCases.ok || !serializedCases.value) {
+    return {
+      ok: false,
+      value: null,
+      errorMessage: serializedCases.errorMessage,
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      cases: serializedCases.value,
+      defaultEnabled: true,
+    },
+    errorMessage: null,
+  };
+}
+
+function serializeDecisionRuleRows(
+  rows: DecisionRuleDraft[],
+  label: 'if' | 'switch',
+): {
+  ok: boolean;
+  value: DecisionConfigRule[] | null;
+  errorMessage: string | null;
+} {
+  if (!Array.isArray(rows) || !rows.length) {
+    return {
+      ok: false,
+      value: null,
+      errorMessage: `Agrega al menos una regla en ${label}.`,
+    };
+  }
+
+  const serialized: DecisionConfigRule[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (!row || typeof row !== 'object') {
+      return {
+        ok: false,
+        value: null,
+        errorMessage: `La regla ${index + 1} de ${label} es invalida.`,
+      };
+    }
+
+    const ruleId = String(row.id ?? '').trim() || `${label}-rule-${index + 1}`;
+    const leftRaw = String(row.left ?? '').trim();
+    const operator = String(row.operator ?? '').trim();
+    const rightRaw = String(row.right ?? '').trim();
+    if (!leftRaw) {
+      return {
+        ok: false,
+        value: null,
+        errorMessage: `Completa el valor izquierdo en ${label}, regla ${index + 1}.`,
+      };
+    }
+    if (!operator) {
+      return {
+        ok: false,
+        value: null,
+        errorMessage: `Selecciona operador en ${label}, regla ${index + 1}.`,
+      };
+    }
+    if (operator !== 'isTrue' && operator !== 'isFalse' && !rightRaw) {
+      return {
+        ok: false,
+        value: null,
+        errorMessage: `Completa el valor derecho en ${label}, regla ${index + 1}.`,
+      };
+    }
+
+    serialized.push({
+      id: ruleId,
+      left: parseConditionInputValue(leftRaw),
+      operator,
+      right:
+        operator === 'isTrue' || operator === 'isFalse'
+          ? ''
+          : parseConditionInputValue(rightRaw),
+    });
+  }
+
+  return {
+    ok: true,
+    value: serialized,
+    errorMessage: null,
+  };
+}
+
+function composeConditionTreeConfig(
+  root: ConditionGroupDraft,
+): {
+  ok: boolean;
+  value: ConditionConfigGroup | null;
+  errorMessage: string | null;
+} {
+  const serialized = serializeConditionGroupDraft(root, 'condicion');
+  if (!serialized.ok) {
+    return {
+      ok: false,
+      value: null,
+      errorMessage: serialized.errorMessage,
+    };
+  }
+
+  return {
+    ok: true,
+    value: serialized.value,
+    errorMessage: null,
+  };
+}
+
+function serializeConditionGroupDraft(
+  group: ConditionGroupDraft,
+  pathLabel: string,
+): {
+  ok: boolean;
+  value: ConditionConfigGroup | null;
+  errorMessage: string | null;
+} {
+  if (!group || group.kind !== 'group') {
+    return {
+      ok: false,
+      value: null,
+      errorMessage: 'La estructura de condiciones es invalida.',
+    };
+  }
+
+  const logicalOperator = normalizeConditionLogicalOperator(
+    group.logicalOperator,
+    'AND',
+  );
+  if (!Array.isArray(group.conditions) || !group.conditions.length) {
+    return {
+      ok: false,
+      value: null,
+      errorMessage: `El ${pathLabel} debe contener al menos una condicion.`,
+    };
+  }
+
+  const serializedConditions: Array<ConditionConfigGroup | ConditionConfigRule> = [];
+  for (let index = 0; index < group.conditions.length; index += 1) {
+    const entry = group.conditions[index];
+    const entryLabel = `${pathLabel} #${index + 1}`;
+
+    if (!entry || typeof entry !== 'object') {
+      return {
+        ok: false,
+        value: null,
+        errorMessage: `La entrada ${entryLabel} es invalida.`,
+      };
+    }
+
+    if (entry.kind === 'group') {
+      const nested = serializeConditionGroupDraft(entry, `grupo ${entryLabel}`);
+      if (!nested.ok || !nested.value) {
+        return {
+          ok: false,
+          value: null,
+          errorMessage:
+            nested.errorMessage ??
+            `No se pudo serializar ${entryLabel}.`,
+        };
+      }
+
+      serializedConditions.push(nested.value);
+      continue;
+    }
+
+    if (entry.kind !== 'rule') {
+      return {
+        ok: false,
+        value: null,
+        errorMessage: `La entrada ${entryLabel} no tiene un tipo de condicion valido.`,
+      };
+    }
+
+    const field = entry.field.trim();
+    if (!field) {
+      return {
+        ok: false,
+        value: null,
+        errorMessage: `Selecciona un campo en ${entryLabel}.`,
+      };
+    }
+
+    const rawOperator = String(entry.operator ?? '').trim();
+    if (!rawOperator) {
+      return {
+        ok: false,
+        value: null,
+        errorMessage: `Selecciona un operador en ${entryLabel}.`,
+      };
+    }
+
+    const isBooleanOperator =
+      rawOperator === 'isTrue' || rawOperator === 'isFalse';
+    const valueSource = entry.valueSource === 'field' ? 'field' : 'literal';
+    const rawValue = entry.value.trim();
+    const rawValuePath = entry.valuePath.trim();
+    if (!isBooleanOperator && valueSource === 'literal' && !rawValue) {
+      return {
+        ok: false,
+        value: null,
+        errorMessage: `Completa el valor en ${entryLabel}.`,
+      };
+    }
+    if (!isBooleanOperator && valueSource === 'field' && !rawValuePath) {
+      return {
+        ok: false,
+        value: null,
+        errorMessage: `Selecciona el campo de comparacion en ${entryLabel}.`,
+      };
+    }
+
+    const conditionRule: ConditionConfigRule = {
+      field,
+      operator: rawOperator,
+    };
+    if (!isBooleanOperator) {
+      conditionRule.valueSource = valueSource;
+      if (valueSource === 'field') {
+        conditionRule.valuePath = rawValuePath;
+      } else {
+        conditionRule.value = parseConditionInputValue(rawValue);
+      }
+    } else {
+      conditionRule.value = rawOperator === 'isTrue';
+    }
+
+    serializedConditions.push(conditionRule);
+  }
+
+  return {
+    ok: true,
+    value: {
+      logicalOperator,
+      conditions: serializedConditions,
+    },
+    errorMessage: null,
+  };
+}
+
+function parseConditionTreeFromConfig(
+  config: Record<string, unknown>,
+  conditionOperatorOptions: ReadonlyArray<ConditionOperatorOption>,
+): ConditionGroupDraft | null {
+  const directTree = parseConditionGroupConfigToDraft(
+    config,
+    conditionOperatorOptions,
+  );
+  if (directTree) {
+    return directTree;
+  }
+
+  const conditionTreeRaw = config['conditionTree'];
+  if (isPlainObject(conditionTreeRaw)) {
+    const nestedTree = parseConditionGroupConfigToDraft(
+      conditionTreeRaw,
+      conditionOperatorOptions,
+    );
+    if (nestedTree) {
+      return nestedTree;
+    }
+  }
+
+  const treeRaw = config['tree'];
+  if (isPlainObject(treeRaw)) {
+    const nestedTree = parseConditionGroupConfigToDraft(
+      treeRaw,
+      conditionOperatorOptions,
+    );
+    if (nestedTree) {
+      return nestedTree;
+    }
+  }
+
+  const legacyRule = parseConditionRuleConfigToDraft(
+    config,
+    conditionOperatorOptions,
+  );
+  if (!legacyRule) {
+    return null;
+  }
+
+  return createConditionGroupDraft({
+    logicalOperator: 'AND',
+    conditions: [legacyRule],
+  });
+}
+
+function parseConditionGroupConfigToDraft(
+  value: Record<string, unknown>,
+  conditionOperatorOptions: ReadonlyArray<ConditionOperatorOption>,
+): ConditionGroupDraft | null {
+  if (!hasConditionGroupConfigShape(value)) {
+    return null;
+  }
+
+  const logicalOperator = normalizeConditionLogicalOperator(
+    value['logicalOperator'],
+    'AND',
+  );
+  const rawConditions = value['conditions'];
+  if (!Array.isArray(rawConditions) || !rawConditions.length) {
+    return null;
+  }
+
+  const conditions: ConditionNodeDraft[] = [];
+  for (const entry of rawConditions) {
+    if (!isPlainObject(entry)) {
+      continue;
+    }
+
+    const nestedGroup = parseConditionGroupConfigToDraft(
+      entry,
+      conditionOperatorOptions,
+    );
+    if (nestedGroup) {
+      conditions.push(nestedGroup);
+      continue;
+    }
+
+    const rule = parseConditionRuleConfigToDraft(
+      entry,
+      conditionOperatorOptions,
+    );
+    if (rule) {
+      conditions.push(rule);
+    }
+  }
+
+  if (!conditions.length) {
+    return null;
+  }
+
+  return createConditionGroupDraft({
+    logicalOperator,
+    conditions,
+  });
+}
+
+function parseConditionRuleConfigToDraft(
+  value: Record<string, unknown>,
+  conditionOperatorOptions: ReadonlyArray<ConditionOperatorOption>,
+): ConditionRuleDraft | null {
+  const field = value['field'];
+  const operator = value['operator'];
+  const hasValue = Object.prototype.hasOwnProperty.call(value, 'value');
+  const valueSourceRaw = value['valueSource'];
+  const valuePathRaw = value['valuePath'];
+  const valueSource =
+    typeof valueSourceRaw === 'string' &&
+    valueSourceRaw.trim().toLowerCase() === 'field'
+      ? 'field'
+      : 'literal';
+  const valuePath =
+    typeof valuePathRaw === 'string' ? valuePathRaw.trim() : '';
+  const normalizedOperatorCandidate =
+    typeof operator === 'string' ? operator.trim() : '';
+  const isBooleanOperatorCandidate =
+    normalizedOperatorCandidate === 'isTrue' ||
+    normalizedOperatorCandidate === 'isFalse';
+  if (
+    typeof field !== 'string' ||
+    !field.trim() ||
+    (!hasValue && !isBooleanOperatorCandidate && valueSource !== 'field')
+  ) {
+    return null;
+  }
+
+  const normalizedOperator = resolveConditionOperator(
+    typeof operator === 'string' ? operator : '',
+    conditionOperatorOptions,
+  );
+  const conditionValue = value['value'];
+
+  return createConditionRuleDraft({
+    field,
+    operator: normalizedOperator,
+    valueSource,
+    value:
+      normalizedOperator === 'isTrue' || normalizedOperator === 'isFalse'
+        ? ''
+        : valueSource === 'field'
+          ? ''
+          : stringifyFieldValue(conditionValue),
+    valuePath:
+      normalizedOperator === 'isTrue' || normalizedOperator === 'isFalse'
+        ? ''
+        : valueSource === 'field'
+          ? valuePath
+          : '',
+  });
+}
+
+function resolveConditionOperator(
+  valueRaw: string,
+  conditionOperatorOptions: ReadonlyArray<ConditionOperatorOption>,
+): ConditionOperator {
+  const normalized = valueRaw.trim().toLowerCase();
+  const matchedOperator = conditionOperatorOptions.find(
+    (option) => option.value.toLowerCase() === normalized,
+  );
+  if (matchedOperator) {
+    return matchedOperator.value;
+  }
+
+  return WORKFLOW_EDITOR_DEFAULTS.conditionOperator;
+}
+
+function hasConditionGroupConfigShape(value: unknown): value is Record<string, unknown> {
+  return (
+    isPlainObject(value) &&
+    typeof value['logicalOperator'] === 'string' &&
+    Array.isArray(value['conditions'])
+  );
+}
+
+function generateConditionDraftId(prefix: 'group' | 'rule'): string {
+  conditionDraftSequence += 1;
+  return `${prefix}-${conditionDraftSequence}`;
+}
+
+function normalizeConditionLogicalOperator(
+  value: unknown,
+  fallback: ConditionLogicalOperator,
+): ConditionLogicalOperator {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  if (normalized === 'OR') {
+    return 'OR';
+  }
+  if (normalized === 'AND') {
+    return 'AND';
+  }
+
+  return fallback;
 }
 
 function normalizeHttpHeaders(
@@ -812,6 +1807,52 @@ function parseAssignedUserId(valueRaw: string): AssignedUserConfigValue | null {
   }
 
   return Math.trunc(parsed);
+}
+
+function parsePositiveIntegerWithDefault(valueRaw: string, fallback: number): number {
+  const normalized = valueRaw.trim();
+  if (!normalized) {
+    return fallback;
+  }
+
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  const asInteger = Math.trunc(parsed);
+  if (asInteger <= 0) {
+    return fallback;
+  }
+
+  return asInteger;
+}
+
+function readPositiveIntegerFromConfigAsString(
+  value: unknown,
+  fallback: string,
+): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const asInteger = Math.trunc(value);
+    return asInteger > 0 ? String(asInteger) : fallback;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return fallback;
+    }
+
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+
+    const asInteger = Math.trunc(parsed);
+    return asInteger > 0 ? String(asInteger) : fallback;
+  }
+
+  return fallback;
 }
 
 function parseAssignedUserIdFromConfig(value: unknown): string {
