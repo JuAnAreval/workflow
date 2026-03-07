@@ -20,6 +20,7 @@ export class WorkflowEdgeMapper {
       domainEntity.workflow = WorkflowMapper.toDomain(raw.workflow);
     }
 
+    domainEntity.routeKey = raw.routeKey ?? null;
     domainEntity.id = raw.id;
     domainEntity.createdAt = raw.createdAt;
     domainEntity.updatedAt = raw.updatedAt;
@@ -49,6 +50,8 @@ export class WorkflowEdgeMapper {
       );
       persistenceEntity.workflowId = domainEntity.workflow.id;
     }
+
+    persistenceEntity.routeKey = domainEntity.routeKey ?? null;
 
     if (domainEntity.id) {
       persistenceEntity.id = domainEntity.id;

@@ -18,6 +18,7 @@ export async function createInitialTriggerHandler(ctx: any): Promise<void> {
   ctx.showOnlyTriggerTemplatesInMenu = true;
   ctx.templateSearch = '';
   ctx.addSourceNodeIdForMenu = null;
+  ctx.addSourceRouteKeyForMenu = null;
   ctx.rightMenuMode = 'add';
   ctx.isRightMenuOpen = true;
   ctx.statusMessage = 'Selecciona el tipo de trigger inicial.';
@@ -50,10 +51,12 @@ export async function createNodeFromMenuHandler(
   }
 
   const sourceNode = ctx.getNodeSourceForMenuCreation();
+  const sourceRouteKey = ctx.getRouteKeyForMenuCreation();
   const position = resolveAddMenuPosition(
     ctx.cy,
     ctx.cyContainer.nativeElement,
     sourceNode,
+    sourceRouteKey,
   );
   const createdNode = await createNodeFromTemplateHandler(ctx, template, position);
   if (!createdNode) {
@@ -65,10 +68,28 @@ export async function createNodeFromMenuHandler(
     !ctx.isTriggerTemplate(template) &&
     sourceNode.id() !== createdNode.id
   ) {
+    const sourceType = String(sourceNode.data('type') ?? '').trim();
+    const isBranchingSource =
+      sourceType === 'decision_if' || sourceType === 'decision_switch';
+    if (isBranchingSource && !sourceRouteKey) {
+      ctx.statusMessage =
+        `Nodo \"${createdNode.label}\" creado. Para conectarlo desde If/Switch usa el + de una salida.`;
+      ctx.showOnlyTriggerTemplatesInMenu = false;
+      ctx.addSourceNodeIdForMenu = null;
+      ctx.addSourceRouteKeyForMenu = null;
+      const nodeElement = ctx.getNodeById(createdNode.id);
+      if (nodeElement) {
+        ctx.openNodeEditor(nodeElement);
+        ctx.showAdderHelper(nodeElement);
+      }
+      return;
+    }
+
     try {
       const wasConnected = await ctx.createEdgeBetweenNodes(
         sourceNode.id(),
         createdNode.id,
+        sourceRouteKey,
       );
       if (wasConnected) {
         ctx.statusMessage = `Nodo "${createdNode.label}" creado y conectado.`;
@@ -80,6 +101,7 @@ export async function createNodeFromMenuHandler(
 
   ctx.showOnlyTriggerTemplatesInMenu = false;
   ctx.addSourceNodeIdForMenu = null;
+  ctx.addSourceRouteKeyForMenu = null;
   const nodeElement = ctx.getNodeById(createdNode.id);
   if (nodeElement) {
     ctx.openNodeEditor(nodeElement);

@@ -25,6 +25,7 @@ export type TriggerEntity =
   | 'schedule';
 export type ConditionOperator =
   | 'contains'
+  | 'notContains'
   | '=='
   | '!='
   | '>'
@@ -32,7 +33,62 @@ export type ConditionOperator =
   | '<'
   | '<='
   | 'startsWith'
-  | 'endsWith';
+  | 'endsWith'
+  | 'isTrue'
+  | 'isFalse';
+export type ConditionLogicalOperator = 'AND' | 'OR';
+export type DecisionLogicalOperator = 'AND' | 'OR';
+export type ConditionFieldValueKind =
+  | 'text'
+  | 'number'
+  | 'boolean'
+  | 'enum'
+  | 'datetime';
+export type ConditionFieldCategory =
+  | 'Evento'
+  | 'Webhook'
+  | 'Schedule'
+  | 'Proyecto'
+  | 'Tarea'
+  | 'Usuario'
+  | 'Formulario JSON'
+  | 'HTTP JSON'
+  | 'Webhook JSON'
+  | 'Datos previos';
+export type ConditionRuleValueSource = 'literal' | 'field';
+export type ConditionDraftNodeKind = 'group' | 'rule';
+
+export type ConditionRuleDraft = {
+  kind: 'rule';
+  id: string;
+  field: string;
+  operator: ConditionOperator;
+  valueSource: ConditionRuleValueSource;
+  value: string;
+  valuePath: string;
+};
+
+export type ConditionGroupDraft = {
+  kind: 'group';
+  id: string;
+  logicalOperator: ConditionLogicalOperator;
+  conditions: ConditionNodeDraft[];
+};
+
+export type ConditionNodeDraft = ConditionGroupDraft | ConditionRuleDraft;
+
+export type DecisionRuleDraft = {
+  id: string;
+  left: string;
+  operator: ConditionOperator;
+  right: string;
+};
+
+export type JavascriptInputDraft = {
+  id: string;
+  name: string;
+  value: string;
+};
 
 export type NodeTemplate = {
   id: string;
@@ -66,6 +122,7 @@ export type WorkflowNodeModel = {
 
 export type WorkflowEdgeModel = {
   id: string;
+  routeKey?: string | null;
   workflow?: {
     id: string;
   };
@@ -85,6 +142,9 @@ export type PaginatedResponse<T> = {
 export type ConditionFieldOption = {
   value: string;
   label: string;
+  category: ConditionFieldCategory;
+  valueKind: ConditionFieldValueKind;
+  enumOptions?: string[];
 };
 
 export type ConditionOperatorOption = {

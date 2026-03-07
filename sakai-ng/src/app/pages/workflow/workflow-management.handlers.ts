@@ -162,6 +162,7 @@ export async function executeManualWorkflowHandler(ctx: any): Promise<void> {
 export function closeRightMenuHandler(ctx: any): void {
   ctx.isRightMenuOpen = false;
   ctx.addSourceNodeIdForMenu = null;
+  ctx.addSourceRouteKeyForMenu = null;
   ctx.rightMenuMode = 'add';
   ctx.showOnlyTriggerTemplatesInMenu = false;
   ctx.templateSearch = '';

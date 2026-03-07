@@ -4,6 +4,17 @@ import {
   NodeKind,
   NodeTemplate,
 } from './workflow.types';
+import {
+  buildDefaultJavascriptCode,
+  buildDefaultJavascriptInputs,
+  JAVASCRIPT_DEFAULT_RESPONSE_SAMPLE,
+  JAVASCRIPT_DEFAULT_RESULT_KEY,
+} from './workflow-javascript-code.utils';
+
+const DEFAULT_JAVASCRIPT_TEMPLATE_INPUTS = buildDefaultJavascriptInputs();
+const DEFAULT_JAVASCRIPT_TEMPLATE_CODE = buildDefaultJavascriptCode(
+  DEFAULT_JAVASCRIPT_TEMPLATE_INPUTS,
+);
 
 export const WORKFLOW_NODE_TEMPLATES: ReadonlyArray<NodeTemplate> = [
   {
@@ -79,7 +90,7 @@ export const WORKFLOW_NODE_TEMPLATES: ReadonlyArray<NodeTemplate> = [
     type: 'action_create_user',
     kind: 'action',
     config:
-      '{"firstName":"Usuario","lastName":"Workflow","email":"usuario.workflow@workflow.local"}',
+      '{"firstName":"Usuario","lastName":"Workflow","email":"usuario.workflow@workflow.local","password":"","roleId":2,"statusId":1}',
   },
   {
     id: 'action-form-builder',
@@ -100,12 +111,35 @@ export const WORKFLOW_NODE_TEMPLATES: ReadonlyArray<NodeTemplate> = [
       '{"url":"https://api.example.com/webhook","method":"POST","headers":{"Content-Type":"application/json"},"body":{"message":"Hola desde workflow"},"response":{"ok":true}}',
   },
   {
-    id: 'decision-condition',
-    label: 'Condicion',
-    description: 'Evalua una regla para continuar el flujo.',
-    type: 'decision_condition',
+    id: 'action-javascript-code',
+    label: 'JavaScript',
+    description: 'Ejecuta codigo JS con variables prev y retorna un resultado.',
+    type: 'action_javascript_code',
+    kind: 'action',
+    config: JSON.stringify({
+      inputs: DEFAULT_JAVASCRIPT_TEMPLATE_INPUTS,
+      code: DEFAULT_JAVASCRIPT_TEMPLATE_CODE,
+      resultKey: JAVASCRIPT_DEFAULT_RESULT_KEY,
+      response: JAVASCRIPT_DEFAULT_RESPONSE_SAMPLE,
+    }),
+  },
+  {
+    id: 'decision-if',
+    label: 'If',
+    description: 'Evalua reglas y enruta por true o false.',
+    type: 'decision_if',
     kind: 'decision',
-    config: '{"field":"project.name","operator":"contains","value":"VIP"}',
+    config:
+      '{"logicalOperator":"AND","rules":[{"id":"r1","left":"","operator":"==","right":""}]}',
+  },
+  {
+    id: 'decision-switch',
+    label: 'Switch',
+    description: 'Evalua casos en orden y enruta por primer match o default.',
+    type: 'decision_switch',
+    kind: 'decision',
+    config:
+      '{"cases":[{"id":"c1","left":"","operator":"==","right":""}],"defaultEnabled":true}',
   },
   {
     id: 'success-end',
@@ -126,24 +160,113 @@ export const WORKFLOW_TEMPLATE_KINDS: ReadonlyArray<NodeKind> = [
 
 export const WORKFLOW_CONDITION_FIELD_OPTIONS: ReadonlyArray<ConditionFieldOption> =
   [
-    { value: 'entityType', label: 'Entidad del evento' },
-    { value: 'event', label: 'Tipo de evento' },
-    { value: 'webhook.token', label: 'Token del webhook' },
-    { value: 'webhook.method', label: 'Metodo del webhook' },
-    { value: 'webhook.ip', label: 'IP del webhook' },
-    { value: 'project.name', label: 'Nombre del proyecto' },
-    { value: 'project.description', label: 'Descripcion del proyecto' },
-    { value: 'task.name', label: 'Nombre de la tarea' },
-    { value: 'task.description', label: 'Descripcion de la tarea' },
-    { value: 'task.estado', label: 'Estado de la tarea' },
-    { value: 'user.firstName', label: 'Nombre del usuario' },
-    { value: 'user.lastName', label: 'Apellido del usuario' },
-    { value: 'user.email', label: 'Email del usuario' },
+    {
+      value: 'entityType',
+      label: 'Entidad del evento',
+      category: 'Evento',
+      valueKind: 'enum',
+      enumOptions: ['project', 'task', 'user', 'manual', 'webhook', 'schedule'],
+    },
+    {
+      value: 'event',
+      label: 'Tipo de evento',
+      category: 'Evento',
+      valueKind: 'enum',
+      enumOptions: ['created', 'updated', 'deleted', 'manual', 'webhook', 'schedule'],
+    },
+    {
+      value: 'webhook.token',
+      label: 'Token recibido por webhook',
+      category: 'Webhook',
+      valueKind: 'text',
+    },
+    {
+      value: 'webhook.method',
+      label: 'Metodo HTTP del webhook',
+      category: 'Webhook',
+      valueKind: 'enum',
+      enumOptions: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    },
+    {
+      value: 'webhook.ip',
+      label: 'IP de origen del webhook',
+      category: 'Webhook',
+      valueKind: 'text',
+    },
+    {
+      value: 'schedule.mode',
+      label: 'Modo del schedule',
+      category: 'Schedule',
+      valueKind: 'enum',
+      enumOptions: ['once', 'recurring'],
+    },
+    {
+      value: 'schedule.timezone',
+      label: 'Zona horaria del schedule',
+      category: 'Schedule',
+      valueKind: 'text',
+    },
+    {
+      value: 'schedule.scheduledFor',
+      label: 'Fecha programada',
+      category: 'Schedule',
+      valueKind: 'datetime',
+    },
+    {
+      value: 'project.name',
+      label: 'Nombre del proyecto',
+      category: 'Proyecto',
+      valueKind: 'text',
+    },
+    {
+      value: 'project.description',
+      label: 'Descripcion del proyecto',
+      category: 'Proyecto',
+      valueKind: 'text',
+    },
+    {
+      value: 'task.name',
+      label: 'Nombre de la tarea',
+      category: 'Tarea',
+      valueKind: 'text',
+    },
+    {
+      value: 'task.description',
+      label: 'Descripcion de la tarea',
+      category: 'Tarea',
+      valueKind: 'text',
+    },
+    {
+      value: 'task.estado',
+      label: 'Estado de la tarea',
+      category: 'Tarea',
+      valueKind: 'enum',
+      enumOptions: ['pendiente', 'en progreso', 'completada'],
+    },
+    {
+      value: 'user.firstName',
+      label: 'Nombre del usuario',
+      category: 'Usuario',
+      valueKind: 'text',
+    },
+    {
+      value: 'user.lastName',
+      label: 'Apellido del usuario',
+      category: 'Usuario',
+      valueKind: 'text',
+    },
+    {
+      value: 'user.email',
+      label: 'Email del usuario',
+      category: 'Usuario',
+      valueKind: 'text',
+    },
   ];
 
 export const WORKFLOW_CONDITION_OPERATOR_OPTIONS: ReadonlyArray<ConditionOperatorOption> =
   [
     { value: 'contains', label: 'Contiene' },
+    { value: 'notContains', label: 'No contiene' },
     { value: '==', label: 'Es igual a' },
     { value: '!=', label: 'Es distinto de' },
     { value: 'startsWith', label: 'Empieza con' },
@@ -152,4 +275,6 @@ export const WORKFLOW_CONDITION_OPERATOR_OPTIONS: ReadonlyArray<ConditionOperato
     { value: '>=', label: 'Mayor o igual que' },
     { value: '<', label: 'Menor que' },
     { value: '<=', label: 'Menor o igual que' },
+    { value: 'isTrue', label: 'Es verdadero' },
+    { value: 'isFalse', label: 'Es falso' },
   ];

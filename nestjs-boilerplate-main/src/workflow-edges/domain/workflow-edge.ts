@@ -23,6 +23,13 @@ export class WorkflowEdge {
 
   @ApiProperty({
     type: String,
+    nullable: true,
+    required: false,
+  })
+  routeKey?: string | null;
+
+  @ApiProperty({
+    type: String,
   })
   id: string;
 

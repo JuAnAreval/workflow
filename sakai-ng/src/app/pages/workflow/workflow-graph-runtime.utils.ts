@@ -50,10 +50,16 @@ export function addEdgeToGraph(
   cy: Core | undefined,
   edge: WorkflowEdgeModel,
   sourceKind: string,
+  sourceNodeData?: { type: string; config: string } | null,
 ): void {
   if (!cy || !edge.fromNode?.id || !edge.toNode?.id) {
     return;
   }
+
+  const routeKey =
+    typeof edge.routeKey === 'string' && edge.routeKey.trim()
+      ? edge.routeKey.trim()
+      : null;
 
   cy.add({
     group: 'edges',
@@ -61,8 +67,115 @@ export function addEdgeToGraph(
       id: edge.id,
       source: edge.fromNode.id,
       target: edge.toNode.id,
-      label: 'next',
+      routeKey,
+      label: resolveEdgeLabelFromRouteKey(routeKey, sourceNodeData),
       kind: sourceKind,
     },
   });
+}
+
+export function refreshOutgoingEdgeLabels(
+  cy: Core | undefined,
+  sourceNodeId: string,
+  sourceNodeData?: { type: string; config: string } | null,
+): void {
+  if (!cy) {
+    return;
+  }
+
+  cy.edges()
+    .toArray()
+    .filter(
+      (edge) =>
+        edge.data('helper') !== 'adder' &&
+        String(edge.data('source') ?? '') === sourceNodeId,
+    )
+    .forEach((edge) => {
+      const routeKey =
+        typeof edge.data('routeKey') === 'string' &&
+        String(edge.data('routeKey') ?? '').trim()
+          ? String(edge.data('routeKey')).trim()
+          : null;
+      edge.data(
+        'label',
+        resolveEdgeLabelFromRouteKey(routeKey, sourceNodeData ?? null),
+      );
+    });
+}
+
+function resolveEdgeLabelFromRouteKey(
+  routeKey: string | null,
+  sourceNodeData?: { type: string; config: string } | null,
+): string {
+  if (!routeKey) {
+    return '';
+  }
+
+  if (routeKey === 'if:true') {
+    return 'true';
+  }
+  if (routeKey === 'if:false') {
+    return 'false';
+  }
+  if (routeKey === 'switch:default') {
+    return 'default';
+  }
+
+  const caseMatch = /^switch:case:(.+)$/.exec(routeKey);
+  if (!caseMatch) {
+    return routeKey;
+  }
+
+  const caseId = String(caseMatch[1] ?? '').trim();
+  if (!caseId) {
+    return 'case';
+  }
+
+  if (sourceNodeData?.type !== 'decision_switch') {
+    return caseId;
+  }
+
+  const caseIndex = resolveSwitchCaseIndexById(sourceNodeData.config, caseId);
+  return caseIndex === null ? caseId : String(caseIndex);
+}
+
+function resolveSwitchCaseIndexById(
+  configRaw: string,
+  caseId: string,
+): number | null {
+  try {
+    const parsed = JSON.parse(configRaw);
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return null;
+    }
+
+    const cases = (parsed as Record<string, unknown>)['cases'];
+    if (!Array.isArray(cases)) {
+      return null;
+    }
+
+    for (let index = 0; index < cases.length; index += 1) {
+      const row = cases[index];
+      if (
+        typeof row !== 'object' ||
+        row === null ||
+        Array.isArray(row)
+      ) {
+        continue;
+      }
+
+      const currentCaseId = String((row as Record<string, unknown>)['id'] ?? '').trim();
+      if (currentCaseId === caseId) {
+        return index;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }

@@ -3,11 +3,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { WorkflowFormJsonEntity } from './infrastructure/persistence/relational/entities/workflow-form-json.entity';
 import { WorkflowHttpJsonEntity } from './infrastructure/persistence/relational/entities/workflow-http-json.entity';
+import { WorkflowJavascriptJsonEntity } from './infrastructure/persistence/relational/entities/workflow-javascript-json.entity';
 import { WorkflowWebhookJsonEntity } from './infrastructure/persistence/relational/entities/workflow-webhook-json.entity';
 
 export type WorkflowSavedJsonSourceType =
   | 'form_json'
   | 'http_json'
+  | 'javascript_json'
   | 'webhook_json';
 
 export type SyncWorkflowNodeJsonInput = {
@@ -43,6 +45,13 @@ export type SyncWebhookExecutionJsonInput = {
   webhookBody: unknown;
 };
 
+export type SyncJavascriptExecutionJsonInput = {
+  workflowId: string;
+  workflowNodeId: string;
+  nodeLabel?: string | null;
+  resultPayload: unknown;
+};
+
 export type WorkflowSavedJsonView = {
   id: string;
   workflowId: string;
@@ -70,6 +79,7 @@ type PersistedJsonRow = {
 export class WorkflowJsonStorageService {
   private readonly formBuilderNodeType = 'action_form_builder';
   private readonly httpRequestNodeType = 'action_http_request';
+  private readonly javascriptActionNodeType = 'action_javascript_code';
   private readonly webhookTriggerNodeType = 'trigger_webhook_event';
   private readonly prevTemplateTokenRegex = /\{\{\s*prev\.([^{}]*?)\s*\}\}/g;
   private readonly genericTemplateTokenRegex = /\{\{\s*[^{}]*\s*\}\}/g;
@@ -79,6 +89,8 @@ export class WorkflowJsonStorageService {
     private readonly workflowFormJsonRepository: Repository<WorkflowFormJsonEntity>,
     @InjectRepository(WorkflowHttpJsonEntity)
     private readonly workflowHttpJsonRepository: Repository<WorkflowHttpJsonEntity>,
+    @InjectRepository(WorkflowJavascriptJsonEntity)
+    private readonly workflowJavascriptJsonRepository: Repository<WorkflowJavascriptJsonEntity>,
     @InjectRepository(WorkflowWebhookJsonEntity)
     private readonly workflowWebhookJsonRepository: Repository<WorkflowWebhookJsonEntity>,
   ) {}
@@ -102,6 +114,9 @@ export class WorkflowJsonStorageService {
         this.workflowHttpJsonRepository.delete({
           workflowNodeId: input.workflowNodeId,
         }),
+        this.workflowJavascriptJsonRepository.delete({
+          workflowNodeId: input.workflowNodeId,
+        }),
         this.workflowWebhookJsonRepository.delete({
           workflowNodeId: input.workflowNodeId,
         }),
@@ -122,6 +137,34 @@ export class WorkflowJsonStorageService {
 
       await Promise.all([
         this.workflowFormJsonRepository.delete({
+          workflowNodeId: input.workflowNodeId,
+        }),
+        this.workflowJavascriptJsonRepository.delete({
+          workflowNodeId: input.workflowNodeId,
+        }),
+        this.workflowWebhookJsonRepository.delete({
+          workflowNodeId: input.workflowNodeId,
+        }),
+      ]);
+      return;
+    }
+
+    if (input.nodeType === this.javascriptActionNodeType) {
+      await this.workflowJavascriptJsonRepository.upsert(
+        {
+          workflowId: input.workflowId,
+          workflowNodeId: input.workflowNodeId,
+          nodeLabel: normalizedNodeLabel,
+          payload: this.stringifyPayload(this.resolveJavascriptTemplatePayload(config)),
+        },
+        ['workflowNodeId'],
+      );
+
+      await Promise.all([
+        this.workflowFormJsonRepository.delete({
+          workflowNodeId: input.workflowNodeId,
+        }),
+        this.workflowHttpJsonRepository.delete({
           workflowNodeId: input.workflowNodeId,
         }),
         this.workflowWebhookJsonRepository.delete({
@@ -149,6 +192,9 @@ export class WorkflowJsonStorageService {
           workflowNodeId: input.workflowNodeId,
         }),
         this.workflowHttpJsonRepository.delete({
+          workflowNodeId: input.workflowNodeId,
+        }),
+        this.workflowJavascriptJsonRepository.delete({
           workflowNodeId: input.workflowNodeId,
         }),
       ]);
@@ -229,6 +275,25 @@ export class WorkflowJsonStorageService {
     );
   }
 
+  async syncJavascriptExecutionResult(
+    input: SyncJavascriptExecutionJsonInput,
+  ): Promise<void> {
+    const normalizedNodeLabel = this.normalizeNullableString(input.nodeLabel);
+    const payload = this.normalizeJavascriptExecutionPayload(
+      input.resultPayload === undefined ? { result: null } : input.resultPayload,
+    );
+
+    await this.workflowJavascriptJsonRepository.upsert(
+      {
+        workflowId: input.workflowId,
+        workflowNodeId: input.workflowNodeId,
+        nodeLabel: normalizedNodeLabel,
+        payload: this.stringifyPayload(payload),
+      },
+      ['workflowNodeId'],
+    );
+  }
+
   async listByWorkflowId(
     workflowId: string,
     limit = 100,
@@ -237,13 +302,18 @@ export class WorkflowJsonStorageService {
       ? Math.max(1, Math.min(500, Math.floor(limit)))
       : 100;
 
-    const [formRows, httpRows, webhookRows] = await Promise.all([
+    const [formRows, httpRows, javascriptRows, webhookRows] = await Promise.all([
       this.workflowFormJsonRepository.find({
         where: { workflowId },
         order: { updatedAt: 'DESC' },
         take: safeLimit,
       }),
       this.workflowHttpJsonRepository.find({
+        where: { workflowId },
+        order: { updatedAt: 'DESC' },
+        take: safeLimit,
+      }),
+      this.workflowJavascriptJsonRepository.find({
         where: { workflowId },
         order: { updatedAt: 'DESC' },
         take: safeLimit,
@@ -262,6 +332,9 @@ export class WorkflowJsonStorageService {
       ...httpRows.map((row) =>
         this.toView(row, 'http_json', this.httpRequestNodeType),
       ),
+      ...javascriptRows.map((row) =>
+        this.toView(row, 'javascript_json', this.javascriptActionNodeType),
+      ),
       ...webhookRows.map((row) =>
         this.toView(row, 'webhook_json', this.webhookTriggerNodeType),
       ),
@@ -274,6 +347,7 @@ export class WorkflowJsonStorageService {
     await Promise.all([
       this.workflowFormJsonRepository.delete({ workflowNodeId }),
       this.workflowHttpJsonRepository.delete({ workflowNodeId }),
+      this.workflowJavascriptJsonRepository.delete({ workflowNodeId }),
       this.workflowWebhookJsonRepository.delete({ workflowNodeId }),
     ]);
   }
@@ -282,6 +356,7 @@ export class WorkflowJsonStorageService {
     await Promise.all([
       this.workflowFormJsonRepository.delete({ workflowId }),
       this.workflowHttpJsonRepository.delete({ workflowId }),
+      this.workflowJavascriptJsonRepository.delete({ workflowId }),
       this.workflowWebhookJsonRepository.delete({ workflowId }),
     ]);
   }
@@ -291,6 +366,12 @@ export class WorkflowJsonStorageService {
     sourceType: WorkflowSavedJsonSourceType,
     sourceNodeType: string,
   ): WorkflowSavedJsonView {
+    const parsedPayload = this.parsePayload(row.payload);
+    const payload =
+      sourceType === 'javascript_json'
+        ? this.normalizeJavascriptExecutionPayload(parsedPayload)
+        : parsedPayload;
+
     return {
       id: row.id,
       workflowId: row.workflowId,
@@ -298,7 +379,7 @@ export class WorkflowJsonStorageService {
       sourceType,
       sourceNodeType,
       nodeLabel: row.nodeLabel ?? null,
-      payload: this.parsePayload(row.payload),
+      payload,
       payloadRaw: row.payload,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -360,6 +441,22 @@ export class WorkflowJsonStorageService {
     }
 
     return this.extractByTemplate(expectedTemplate, {});
+  }
+
+  private resolveJavascriptTemplatePayload(config: Record<string, unknown>): unknown {
+    const resultKey = this.normalizeJavascriptResultKey(config['resultKey']);
+    return {
+      [resultKey]: null,
+    };
+  }
+
+  private normalizeJavascriptResultKey(value: unknown): string {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (!normalized) {
+      return 'result';
+    }
+
+    return normalized;
   }
 
   private parseNodeConfig(configRaw: string): Record<string, unknown> {
@@ -484,23 +581,34 @@ export class WorkflowJsonStorageService {
 
     const rawTemplate = config['response'];
     if (rawTemplate === null || rawTemplate === undefined) {
-      return {};
+      return undefined;
     }
 
     if (typeof rawTemplate === 'string') {
       const normalized = rawTemplate.trim();
       if (!normalized) {
-        return {};
+        return undefined;
       }
 
       try {
-        return JSON.parse(normalized);
+        const parsed = JSON.parse(normalized);
+        return this.normalizeExpectedResponseTemplateValue(parsed);
       } catch {
-        return {};
+        return undefined;
       }
     }
 
-    return rawTemplate;
+    return this.normalizeExpectedResponseTemplateValue(rawTemplate);
+  }
+
+  private normalizeExpectedResponseTemplateValue(
+    template: unknown,
+  ): unknown | undefined {
+    if (this.isPlainObject(template) && !Object.keys(template).length) {
+      return undefined;
+    }
+
+    return template;
   }
 
   private extractByTemplate(
@@ -778,6 +886,58 @@ export class WorkflowJsonStorageService {
 
   private isPlainObject(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
+  private normalizeJavascriptExecutionPayload(value: unknown): Record<string, unknown> {
+    const payload = this.isPlainObject(value)
+      ? { ...value }
+      : { result: value ?? null };
+
+    for (const [wrapperKey, wrapperValue] of Object.entries(payload)) {
+      if (!this.isPlainObject(wrapperValue)) {
+        continue;
+      }
+
+      const duplicatedNestedKeys: string[] = [];
+      for (const [nestedKey, nestedValue] of Object.entries(wrapperValue)) {
+        if (!nestedKey || nestedKey === wrapperKey) {
+          continue;
+        }
+        if (!Object.prototype.hasOwnProperty.call(payload, nestedKey)) {
+          continue;
+        }
+        if (!this.arePayloadValuesEquivalent(payload[nestedKey], nestedValue)) {
+          continue;
+        }
+
+        duplicatedNestedKeys.push(nestedKey);
+      }
+
+      for (const duplicatedKey of duplicatedNestedKeys) {
+        delete payload[duplicatedKey];
+      }
+    }
+
+    return payload;
+  }
+
+  private arePayloadValuesEquivalent(left: unknown, right: unknown): boolean {
+    if (left === right) {
+      return true;
+    }
+
+    const areObjects =
+      (this.isPlainObject(left) && this.isPlainObject(right)) ||
+      (Array.isArray(left) && Array.isArray(right));
+    if (!areObjects) {
+      return false;
+    }
+
+    try {
+      return JSON.stringify(left) === JSON.stringify(right);
+    } catch {
+      return false;
+    }
   }
 
   private asRecord(value: unknown): Record<string, unknown> {

@@ -354,6 +354,9 @@ export class WorkflowList implements OnInit {
     if (row.sourceType === 'http_json' || row.sourceType === 'http_response') {
       return 'Peticion HTTP';
     }
+    if (row.sourceType === 'javascript_json') {
+      return 'JavaScript';
+    }
     if (row.sourceType === 'webhook_json') {
       return 'Webhook';
     }

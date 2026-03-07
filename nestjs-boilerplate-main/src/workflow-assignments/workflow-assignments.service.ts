@@ -8,6 +8,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, Raw, Repository } from 'typeorm';
 import { AuthProvidersEnum } from '../auth/auth-providers.enum';
 import bcrypt from 'bcryptjs';
+import { RoleEnum } from '../roles/roles.enum';
+import { StatusEnum } from '../statuses/statuses.enum';
 import { User } from '../users/domain/user';
 import { ProjectRepository } from '../projects/infrastructure/persistence/project.repository';
 import { TaskRepository } from '../tasks/infrastructure/persistence/task.repository';
@@ -30,6 +32,8 @@ import {
 export class WorkflowAssignmentsService {
   private readonly prevTemplateTokenRegex = /\{\{\s*prev\.[^{}]*\s*\}\}/g;
   private readonly malformedPrevTemplateTokenRegex = /\{\{\s*prev\s*\}\}/g;
+  private readonly defaultWorkflowUserRoleId = RoleEnum.user;
+  private readonly defaultWorkflowUserStatusId = StatusEnum.active;
 
   constructor(
     @InjectRepository(WorkflowAssignmentEntity)
@@ -637,6 +641,8 @@ export class WorkflowAssignmentsService {
       formData,
       templateData,
     );
+    const roleId = this.resolveWorkflowUserRoleId(formData, templateData);
+    const statusId = this.resolveWorkflowUserStatusId(formData, templateData);
 
     const user = await this.userRepository.create({
       email,
@@ -646,8 +652,12 @@ export class WorkflowAssignmentsService {
       provider: AuthProvidersEnum.email,
       socialId: null,
       photo: undefined,
-      role: undefined,
-      status: undefined,
+      role: {
+        id: roleId,
+      },
+      status: {
+        id: statusId,
+      },
     });
 
     return {
@@ -656,6 +666,8 @@ export class WorkflowAssignmentsService {
         firstName,
         lastName,
         email,
+        roleId,
+        statusId,
       },
     };
   }
@@ -676,6 +688,60 @@ export class WorkflowAssignmentsService {
 
     const salt = await bcrypt.genSalt();
     return bcrypt.hash(rawPassword, salt);
+  }
+
+  private resolveWorkflowUserRoleId(
+    formData: WorkflowAssignmentData,
+    templateData: WorkflowAssignmentData,
+  ): number {
+    const rawValue = this.readOptionalInteger(
+      formData['roleId'],
+      templateData['roleId'],
+    );
+    if (rawValue === RoleEnum.admin || rawValue === RoleEnum.user) {
+      return rawValue;
+    }
+
+    return this.defaultWorkflowUserRoleId;
+  }
+
+  private resolveWorkflowUserStatusId(
+    formData: WorkflowAssignmentData,
+    templateData: WorkflowAssignmentData,
+  ): number {
+    const rawValue = this.readOptionalInteger(
+      formData['statusId'],
+      templateData['statusId'],
+    );
+    if (rawValue === StatusEnum.active || rawValue === StatusEnum.inactive) {
+      return rawValue;
+    }
+
+    return this.defaultWorkflowUserStatusId;
+  }
+
+  private readOptionalInteger(...values: unknown[]): number | null {
+    for (const value of values) {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return Math.trunc(value);
+      }
+
+      if (typeof value !== 'string') {
+        continue;
+      }
+
+      const trimmed = this.stripWorkflowVariableTokens(value);
+      if (!trimmed) {
+        continue;
+      }
+
+      const parsed = Number(trimmed);
+      if (Number.isFinite(parsed)) {
+        return Math.trunc(parsed);
+      }
+    }
+
+    return null;
   }
 
   private readRequiredString(...values: unknown[]): string | null {

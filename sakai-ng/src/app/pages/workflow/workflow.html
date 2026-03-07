@@ -98,8 +98,8 @@
     [closable]="false"
     [showCloseIcon]="false"
     [baseZIndex]="1100"
-    [style]="{ width: '27rem', maxWidth: '97vw' }"
-    styleClass="workflow-right-drawer"
+    [style]="getRightDrawerStyle()"
+    [styleClass]="getRightDrawerStyleClass()"
   >
     <div class="right-menu">
     <div class="menu-header">
@@ -482,9 +482,9 @@
                       style="caret-color:#1f364e;"
                       placeholder='{"event":"created"}'
                     ></textarea>
-                    @if (triggerWebhookResponse.trim() && !isVariableFieldFocused('triggerWebhookResponse')) {
-                      <div
-                        style="position:absolute;inset:1px;padding:.62rem .68rem;display:block;pointer-events:none;overflow:hidden;white-space:pre-wrap;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                  @if (triggerWebhookResponse.trim() && !isVariableFieldFocused('triggerWebhookResponse')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:.62rem .68rem;display:block;pointer-events:none;overflow:hidden;white-space:pre-wrap;color:#1f364e;font-size:.92rem;line-height:1.35;"
                       >
                         @for (segment of buildVariableDisplaySegments(triggerWebhookResponse); track $index) {
                           @if (segment.isToken) {
@@ -505,6 +505,9 @@
                       </div>
                     }
                   </div>
+                  <small class="menu-field-note">
+                    Si lo dejas vacio, se guarda todo el payload recibido.
+                  </small>
                 </label>
               } @else {
                 <p class="visual-title">Evento que activa el workflow</p>
@@ -538,90 +541,442 @@
                 </label>
               }
             </div>
-          } @else if (isConditionEditor() && !useRawConfigEditor) {
+                    } @else if (isIfEditor() && !useRawConfigEditor) {
             <div class="visual-card">
-              <p class="visual-title">Condicion</p>
+              <p class="visual-title">If</p>
+              <p class="menu-empty">
+                Compara reglas y enruta por salida <strong>true</strong> o <strong>false</strong>.
+              </p>
 
               <label class="menu-field">
-                <span>Campo</span>
-                <select
-                  class="menu-select"
-                  [value]="conditionField"
-                  (change)="onConditionFieldChange($event)"
-                >
-                  @for (field of conditionFieldOptions; track field.value) {
-                    <option [value]="field.value">{{ field.label }}</option>
+                <span>Modo</span>
+                <select class="menu-select" [(ngModel)]="decisionIfLogicalOperator">
+                  @for (option of getDecisionLogicalOperatorOptions(); track option.value) {
+                    <option [ngValue]="option.value">{{ option.label }}</option>
                   }
                 </select>
               </label>
 
-              <label class="menu-field">
-                <span>Operador</span>
-                <select
-                  class="menu-select"
-                  [value]="conditionOperator"
-                  (change)="onConditionOperatorChange($event)"
-                >
-                  @for (operator of conditionOperatorOptions; track operator.value) {
-                    <option [value]="operator.value">{{ operator.label }}</option>
-                  }
-                </select>
-              </label>
+              <div style="display:grid;gap:.5rem;">
+                @for (rule of decisionIfRules; track rule.id; let index = $index) {
+                  <article style="border:1px solid #d2e2ef;border-radius:.7rem;background:#f8fbff;padding:.55rem;display:grid;gap:.45rem;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:.45rem;">
+                      <span style="color:#35587b;font-size:.76rem;font-weight:700;">Regla {{ index + 1 }}</span>
+                      <button type="button" class="menu-btn danger menu-btn-inline-danger" (click)="removeDecisionIfRule(rule.id)">Quitar</button>
+                    </div>
 
-              <label class="menu-field">
-                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
-                  <span>Valor</span>
+                    <label class="menu-field" style="margin:0;">
+                      <span style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                        <span>Left</span>
+                        <button type="button" class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;" [disabled]="!hasVariableCandidatesForEditor()" (click)="openVariablePickerForDecisionRuleOperand('if', rule.id, 'left')">+</button>
+                      </span>
+                      <div style="position:relative;">
+                        <input
+                          type="text"
+                          class="menu-input"
+                          [(ngModel)]="rule.left"
+                          placeholder="Usa + o escribe valor"
+                          (focus)="onDecisionRuleOperandFocus('if', rule.id, 'left', $event)"
+                          (blur)="onDecisionRuleOperandBlur('if', rule.id, 'left')"
+                          (click)="captureDecisionRuleOperandSelection('if', rule.id, 'left', $event)"
+                          (keyup)="captureDecisionRuleOperandSelection('if', rule.id, 'left', $event)"
+                          (select)="captureDecisionRuleOperandSelection('if', rule.id, 'left', $event)"
+                          [style.color]="rule.left.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'left') ? 'transparent' : null"
+                          [style.webkitTextFillColor]="rule.left.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'left') ? 'transparent' : null"
+                          style="caret-color:#1f364e;"
+                        />
+                        @if (rule.left.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'left')) {
+                          <div
+                            style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                          >
+                            @for (segment of buildVariableDisplaySegments(rule.left); track $index) {
+                              @if (segment.isToken) {
+                                <button
+                                  type="button"
+                                  style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                                  (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                  (click)="removeTokenByDecisionRuleOperand('if', rule.id, 'left', segment.tokenIndex)"
+                                  title="Quitar variable"
+                                >
+                                  <span>{{ segment.label }}</span>
+                                  <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                                </button>
+                              } @else {
+                                <span [textContent]="segment.text"></span>
+                              }
+                            }
+                          </div>
+                        }
+                      </div>
+                    </label>
+
+                    <label class="menu-field" style="margin:0;">
+                      <span>Operador</span>
+                      <select class="menu-select" [(ngModel)]="rule.operator">
+                        @for (operator of conditionOperatorOptions; track operator.value) {
+                          <option [ngValue]="operator.value">{{ operator.label }}</option>
+                        }
+                      </select>
+                    </label>
+
+                    @if (rule.operator !== 'isTrue' && rule.operator !== 'isFalse') {
+                      <label class="menu-field" style="margin:0;">
+                        <span style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                          <span>Right</span>
+                          <button type="button" class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;" [disabled]="!hasVariableCandidatesForEditor()" (click)="openVariablePickerForDecisionRuleOperand('if', rule.id, 'right')">+</button>
+                        </span>
+                        <div style="position:relative;">
+                          <input
+                            type="text"
+                            class="menu-input"
+                            [(ngModel)]="rule.right"
+                            placeholder="Valor a comparar"
+                            (focus)="onDecisionRuleOperandFocus('if', rule.id, 'right', $event)"
+                            (blur)="onDecisionRuleOperandBlur('if', rule.id, 'right')"
+                            (click)="captureDecisionRuleOperandSelection('if', rule.id, 'right', $event)"
+                            (keyup)="captureDecisionRuleOperandSelection('if', rule.id, 'right', $event)"
+                            (select)="captureDecisionRuleOperandSelection('if', rule.id, 'right', $event)"
+                            [style.color]="rule.right.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'right') ? 'transparent' : null"
+                            [style.webkitTextFillColor]="rule.right.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'right') ? 'transparent' : null"
+                            style="caret-color:#1f364e;"
+                          />
+                          @if (rule.right.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'right')) {
+                            <div
+                              style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                            >
+                              @for (segment of buildVariableDisplaySegments(rule.right); track $index) {
+                                @if (segment.isToken) {
+                                  <button
+                                    type="button"
+                                    style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                                    (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                    (click)="removeTokenByDecisionRuleOperand('if', rule.id, 'right', segment.tokenIndex)"
+                                    title="Quitar variable"
+                                  >
+                                    <span>{{ segment.label }}</span>
+                                    <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                                  </button>
+                                } @else {
+                                  <span [textContent]="segment.text"></span>
+                                }
+                              }
+                            </div>
+                          }
+                        </div>
+                      </label>
+                    }
+                  </article>
+                }
+              </div>
+
+              <button type="button" class="menu-btn ghost menu-btn-inline-ghost" (click)="addDecisionIfRule()">+ Agregar regla</button>
+
+              @if (getDecisionIfValidationMessage()) {
+                <div style="margin-top:.62rem;padding:.5rem .62rem;border-radius:.56rem;border:1px solid #f6d1d1;background:#fff6f6;color:#8f2f2f;font-size:.78rem;">
+                  {{ getDecisionIfValidationMessage() }}
+                </div>
+              }
+
+              <div style="margin-top:.62rem;padding:.58rem .68rem;border-radius:.62rem;border:1px solid #d6e5f3;background:#f4f9ff;">
+                <p style="margin:0 0 .32rem;color:#325679;font-size:.76rem;font-weight:700;">Vista previa</p>
+                <p style="margin:0;color:#284766;font-size:.8rem;line-height:1.35;">
+                  true si: {{ getDecisionIfPreviewText() }}
+                </p>
+              </div>
+            </div>
+          } @else if (isSwitchEditor() && !useRawConfigEditor) {
+            <div class="visual-card">
+              <p class="visual-title">Switch</p>
+              <p class="menu-empty">Evalua cases en orden y usa <strong>default</strong> cuando no hay match.</p>
+
+              <div style="display:grid;gap:.5rem;">
+                @for (rule of decisionSwitchCases; track rule.id; let index = $index) {
+                  <article style="border:1px solid #d2e2ef;border-radius:.7rem;background:#f8fbff;padding:.55rem;display:grid;gap:.45rem;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:.45rem;">
+                      <span style="color:#35587b;font-size:.76rem;font-weight:700;">Case {{ getDecisionSwitchCaseLabel(index) }}</span>
+                      <button type="button" class="menu-btn danger menu-btn-inline-danger" (click)="removeDecisionSwitchCase(rule.id)">Quitar</button>
+                    </div>
+
+                    <label class="menu-field" style="margin:0;">
+                      <span style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                        <span>Left</span>
+                        <button type="button" class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;" [disabled]="!hasVariableCandidatesForEditor()" (click)="openVariablePickerForDecisionRuleOperand('switch', rule.id, 'left')">+</button>
+                      </span>
+                      <div style="position:relative;">
+                        <input
+                          type="text"
+                          class="menu-input"
+                          [(ngModel)]="rule.left"
+                          placeholder="Usa + o escribe valor"
+                          (focus)="onDecisionRuleOperandFocus('switch', rule.id, 'left', $event)"
+                          (blur)="onDecisionRuleOperandBlur('switch', rule.id, 'left')"
+                          (click)="captureDecisionRuleOperandSelection('switch', rule.id, 'left', $event)"
+                          (keyup)="captureDecisionRuleOperandSelection('switch', rule.id, 'left', $event)"
+                          (select)="captureDecisionRuleOperandSelection('switch', rule.id, 'left', $event)"
+                          [style.color]="rule.left.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'left') ? 'transparent' : null"
+                          [style.webkitTextFillColor]="rule.left.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'left') ? 'transparent' : null"
+                          style="caret-color:#1f364e;"
+                        />
+                        @if (rule.left.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'left')) {
+                          <div
+                            style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                          >
+                            @for (segment of buildVariableDisplaySegments(rule.left); track $index) {
+                              @if (segment.isToken) {
+                                <button
+                                  type="button"
+                                  style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                                  (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                  (click)="removeTokenByDecisionRuleOperand('switch', rule.id, 'left', segment.tokenIndex)"
+                                  title="Quitar variable"
+                                >
+                                  <span>{{ segment.label }}</span>
+                                  <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                                </button>
+                              } @else {
+                                <span [textContent]="segment.text"></span>
+                              }
+                            }
+                          </div>
+                        }
+                      </div>
+                    </label>
+
+                    <label class="menu-field" style="margin:0;">
+                      <span>Operador</span>
+                      <select class="menu-select" [(ngModel)]="rule.operator">
+                        @for (operator of conditionOperatorOptions; track operator.value) {
+                          <option [ngValue]="operator.value">{{ operator.label }}</option>
+                        }
+                      </select>
+                    </label>
+
+                    @if (rule.operator !== 'isTrue' && rule.operator !== 'isFalse') {
+                      <label class="menu-field" style="margin:0;">
+                        <span style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                          <span>Right</span>
+                          <button type="button" class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;" [disabled]="!hasVariableCandidatesForEditor()" (click)="openVariablePickerForDecisionRuleOperand('switch', rule.id, 'right')">+</button>
+                        </span>
+                        <div style="position:relative;">
+                          <input
+                            type="text"
+                            class="menu-input"
+                            [(ngModel)]="rule.right"
+                            placeholder="Valor a comparar"
+                            (focus)="onDecisionRuleOperandFocus('switch', rule.id, 'right', $event)"
+                            (blur)="onDecisionRuleOperandBlur('switch', rule.id, 'right')"
+                            (click)="captureDecisionRuleOperandSelection('switch', rule.id, 'right', $event)"
+                            (keyup)="captureDecisionRuleOperandSelection('switch', rule.id, 'right', $event)"
+                            (select)="captureDecisionRuleOperandSelection('switch', rule.id, 'right', $event)"
+                            [style.color]="rule.right.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'right') ? 'transparent' : null"
+                            [style.webkitTextFillColor]="rule.right.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'right') ? 'transparent' : null"
+                            style="caret-color:#1f364e;"
+                          />
+                          @if (rule.right.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'right')) {
+                            <div
+                              style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                            >
+                              @for (segment of buildVariableDisplaySegments(rule.right); track $index) {
+                                @if (segment.isToken) {
+                                  <button
+                                    type="button"
+                                    style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                                    (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                    (click)="removeTokenByDecisionRuleOperand('switch', rule.id, 'right', segment.tokenIndex)"
+                                    title="Quitar variable"
+                                  >
+                                    <span>{{ segment.label }}</span>
+                                    <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                                  </button>
+                                } @else {
+                                  <span [textContent]="segment.text"></span>
+                                }
+                              }
+                            </div>
+                          }
+                        </div>
+                      </label>
+                    }
+                  </article>
+                }
+              </div>
+
+              <button type="button" class="menu-btn ghost menu-btn-inline-ghost" (click)="addDecisionSwitchCase()">+ Agregar case</button>
+
+              <div style="margin-top:.6rem;padding:.5rem .62rem;border:1px dashed #c4d8ea;border-radius:.6rem;background:#fff;color:#577da0;font-size:.78rem;">
+                Salida fija adicional: <strong>default</strong>.
+              </div>
+
+              @if (getDecisionSwitchValidationMessage()) {
+                <div style="margin-top:.62rem;padding:.5rem .62rem;border-radius:.56rem;border:1px solid #f6d1d1;background:#fff6f6;color:#8f2f2f;font-size:.78rem;">
+                  {{ getDecisionSwitchValidationMessage() }}
+                </div>
+              }
+            </div>
+          } @else if (isJavascriptEditor() && !useRawConfigEditor) {
+            <div class="visual-card wf-js-editor-card">
+              <p class="visual-title">JavaScript</p>
+              <p class="menu-empty">
+                Define valores de entrada y procesa con JS. El resultado del <strong>return</strong> se guarda para variables globales.
+              </p>
+
+              <section class="wf-js-section">
+                <div class="wf-js-section-header">
+                  <p class="wf-js-section-title">Inputs</p>
                   <button
                     type="button"
-                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
-                    [disabled]="!hasVariableCandidatesForEditor()"
-                    (click)="openVariablePickerForField('conditionValue')"
-                    title="Anadir variable"
+                    class="menu-btn ghost wf-js-add-input-btn"
+                    (click)="addJavascriptInputRow()"
                   >
-                    +
+                    + Agregar valor
                   </button>
-                </span>
-                <div style="position:relative;">
-                  <input
-                    type="text"
-                    class="menu-input"
-                    [value]="conditionValue"
-                    (input)="onConditionValueInput($event)"
-                    (keydown)="onVariableFieldKeydown('conditionValue', $event)"
-                    (focus)="onVariableFieldFocus('conditionValue')"
-                    (blur)="onVariableFieldBlur('conditionValue')"
-                    (click)="captureVariableFieldSelection('conditionValue', $event)"
-                    (keyup)="captureVariableFieldSelection('conditionValue', $event)"
-                    (select)="captureVariableFieldSelection('conditionValue', $event)"
-                    [style.color]="conditionValue.trim() && !isVariableFieldFocused('conditionValue') ? 'transparent' : null"
-                    [style.webkitTextFillColor]="conditionValue.trim() && !isVariableFieldFocused('conditionValue') ? 'transparent' : null"
-                    style="caret-color:#1f364e;"
-                    placeholder="Ej: VIP, created, 10"
-                  />
-                  @if (conditionValue.trim() && !isVariableFieldFocused('conditionValue')) {
-                    <div
-                      style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
-                    >
-                      @for (segment of buildVariableDisplaySegments(conditionValue); track $index) {
-                        @if (segment.isToken) {
-                          <button
-                            type="button"
-                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
-                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
-                            (click)="removeTokenByField('conditionValue', segment.tokenIndex)"
-                            title="Quitar variable"
+                </div>
+
+                <div class="wf-js-input-list">
+                  @for (row of actionJavascriptInputs; track row.id; let index = $index) {
+                    <article class="wf-js-input-row">
+                      <div class="wf-js-input-grid">
+                        <label class="menu-field wf-js-field wf-js-name-field">
+                          <span class="wf-js-field-label">
+                            <span
+                              class="wf-js-color-dot"
+                              [style.backgroundColor]="getJavascriptInputColor(row.name)"
+                            ></span>
+                            <span>Input {{ index + 1 }}</span>
+                          </span>
+                          <input
+                            type="text"
+                            class="menu-input wf-js-compact-input"
+                            [value]="row.name"
+                            (input)="onJavascriptInputNameInput(row.id, $event)"
+                            (blur)="onJavascriptInputNameBlur(row.id)"
+                            (keydown)="onJavascriptInputNameKeydown(row.id, $event)"
+                            placeholder="valor1"
+                          />
+                        </label>
+
+                        <label class="menu-field wf-js-field wf-js-value-field">
+                          <span
+                            class="wf-js-field-label"
+                            style="justify-content:space-between;"
                           >
-                            <span>{{ segment.label }}</span>
-                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
-                          </button>
-                        } @else {
-                          <span [textContent]="segment.text"></span>
-                        }
-                      }
-                    </div>
+                            <span>Valor</span>
+                            <button
+                              type="button"
+                              class="inline-var-trigger"
+                              [disabled]="!hasVariableCandidatesForEditor()"
+                              (click)="openVariablePickerForJavascriptInput(row.id)"
+                              style="width:1.12rem;height:1.12rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.76rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                            >
+                              +
+                            </button>
+                          </span>
+                          <div style="position:relative;">
+                            <input
+                              type="text"
+                              class="menu-input wf-js-compact-input"
+                              [value]="row.value"
+                              (input)="onJavascriptInputValueInput(row.id, $event)"
+                              placeholder="Usa + o escribe valor"
+                              (focus)="onJavascriptInputValueFocus(row.id, $event)"
+                              (blur)="onJavascriptInputValueBlur(row.id)"
+                              (click)="captureJavascriptInputValueSelection(row.id, $event)"
+                              (keyup)="captureJavascriptInputValueSelection(row.id, $event)"
+                              (select)="captureJavascriptInputValueSelection(row.id, $event)"
+                              [style.color]="row.value.trim() && !isJavascriptInputValueFocused(row.id) ? 'transparent' : null"
+                              [style.webkitTextFillColor]="row.value.trim() && !isJavascriptInputValueFocused(row.id) ? 'transparent' : null"
+                              style="caret-color:#1f364e;"
+                            />
+                            @if (row.value.trim() && !isJavascriptInputValueFocused(row.id)) {
+                              <div
+                                style="position:absolute;inset:1px;padding:0 .52rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.84rem;line-height:1.35;"
+                              >
+                                @for (segment of buildVariableDisplaySegments(row.value); track $index) {
+                                  @if (segment.isToken) {
+                                    <button
+                                      type="button"
+                                      style="display:inline-flex;align-items:center;gap:.3rem;padding:.16rem .42rem .16rem .48rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.74rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                                      (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                      (click)="removeTokenByJavascriptInput(row.id, segment.tokenIndex)"
+                                      title="Quitar variable"
+                                    >
+                                      <span>{{ segment.label }}</span>
+                                      <span style="font-size:.72rem;line-height:1;opacity:.9;">x</span>
+                                    </button>
+                                  } @else {
+                                    <span [textContent]="segment.text"></span>
+                                  }
+                                }
+                              </div>
+                            }
+                          </div>
+                        </label>
+
+                        <button
+                          type="button"
+                          class="wf-js-remove-btn"
+                          (click)="removeJavascriptInputRow(row.id)"
+                          title="Quitar valor"
+                        >
+                          x
+                        </button>
+                      </div>
+                    </article>
                   }
                 </div>
-              </label>
+              </section>
+
+              <section class="wf-js-section">
+                <p class="wf-js-section-title">Resultado</p>
+                <label class="menu-field" style="margin:0;">
+                  <span>Clave de resultado</span>
+                  <input
+                    type="text"
+                    class="menu-input wf-js-compact-input"
+                    [value]="actionJavascriptResultKey"
+                    (input)="onNormalizedInput('actionJavascriptResultKey', $event)"
+                    placeholder="result"
+                  />
+                  <small class="menu-field-note">El retorno se guarda unicamente dentro de esta clave.</small>
+                </label>
+                <label class="menu-field" style="margin:0;">
+                  <span>Salida esperada (JSON)</span>
+                  <textarea
+                    class="menu-textarea"
+                    rows="6"
+                    [value]="actionJavascriptResponse"
+                    (input)="onNormalizedInput('actionJavascriptResponse', $event)"
+                    placeholder="{&#10;  &quot;count&quot;: 1,&#10;  &quot;values&quot;: {&#10;    &quot;valor1&quot;: &quot;&quot;&#10;  }&#10;}"
+                  ></textarea>
+                  <small class="menu-field-note">
+                    Se usa para sugerir variables anidadas en el selector global.
+                  </small>
+                </label>
+              </section>
+
+              <section class="wf-js-section">
+                <p class="wf-js-section-title">Codigo</p>
+                <label class="menu-field" style="margin:0;">
+                  <span>Editor JavaScript</span>
+                  <div
+                    class="wf-js-monaco-shell"
+                    (keydown)="onJavascriptMonacoContainerKeydown($event)"
+                    (keyup)="onJavascriptMonacoContainerKeyup($event)"
+                  >
+                    <div
+                      #javascriptMonacoContainer
+                      class="wf-js-monaco"
+                    ></div>
+                  </div>
+                  <small class="menu-field-note">Debe incluir al menos un <strong>return</strong>.</small>
+                </label>
+              </section>
+
+              @if (getJavascriptValidationMessage()) {
+                <div style="margin-top:.62rem;padding:.5rem .62rem;border-radius:.56rem;border:1px solid #f6d1d1;background:#fff6f6;color:#8f2f2f;font-size:.78rem;">
+                  {{ getJavascriptValidationMessage() }}
+                </div>
+              }
             </div>
           } @else if (isCreateProjectEditor() && !useRawConfigEditor) {
             <div class="visual-card">
@@ -767,9 +1122,9 @@
                       }
                     </div>
                   }
-                </div>
-              </label>
-            </div>
+                  </div>
+                </label>
+              </div>
           } @else if (isCreateTaskEditor() && !useRawConfigEditor) {
             <div class="visual-card">
               <p class="visual-title">Tarea a crear</p>
@@ -1131,6 +1486,89 @@
                   }
                 </div>
               </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Contrasena (opcional)</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('userPassword')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="actionUserPassword"
+                    (input)="onNormalizedInput('actionUserPassword', $event)"
+                    (keydown)="onVariableFieldKeydown('userPassword', $event)"
+                    (focus)="onVariableFieldFocus('userPassword')"
+                    (blur)="onVariableFieldBlur('userPassword')"
+                    (click)="captureVariableFieldSelection('userPassword', $event)"
+                    (keyup)="captureVariableFieldSelection('userPassword', $event)"
+                    (select)="captureVariableFieldSelection('userPassword', $event)"
+                    [style.color]="actionUserPassword.trim() && !isVariableFieldFocused('userPassword') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionUserPassword.trim() && !isVariableFieldFocused('userPassword') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="Contrasena temporal o variable"
+                  />
+                  @if (actionUserPassword.trim() && !isVariableFieldFocused('userPassword')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionUserPassword); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('userPassword', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+              </label>
+
+              <label class="menu-field">
+                <span>Role ID</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  class="menu-input"
+                  [value]="actionUserRoleId"
+                  (input)="onNormalizedInput('actionUserRoleId', $event)"
+                  placeholder="2"
+                />
+                <small class="menu-field-note">Por defecto: 2 (usuario).</small>
+              </label>
+
+              <label class="menu-field">
+                <span>Status ID</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  class="menu-input"
+                  [value]="actionUserStatusId"
+                  (input)="onNormalizedInput('actionUserStatusId', $event)"
+                  placeholder="1"
+                />
+                <small class="menu-field-note">Por defecto: 1 (activo).</small>
+              </label>
             </div>
           } @else if (isFormActionEditor() && !useRawConfigEditor) {
             <div class="visual-card">
@@ -1446,6 +1884,9 @@
                     </div>
                   }
                 </div>
+                <small class="menu-field-note">
+                  Si lo dejas vacio, se guarda todo el payload recibido.
+                </small>
               </label>
             </div>
           }
@@ -1799,3 +2240,4 @@
     ></p-button>
   </ng-template>
 </p-dialog>
+

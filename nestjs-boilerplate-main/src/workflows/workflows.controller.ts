@@ -95,7 +95,12 @@ export class WorkflowsController {
               workflowNodeId: { type: 'string', nullable: true },
               sourceType: {
                 type: 'string',
-                enum: ['form_json', 'http_json', 'webhook_json'],
+                enum: [
+                  'form_json',
+                  'http_json',
+                  'javascript_json',
+                  'webhook_json',
+                ],
               },
               sourceNodeType: { type: 'string', nullable: true },
               nodeLabel: { type: 'string', nullable: true },

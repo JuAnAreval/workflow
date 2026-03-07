@@ -6,6 +6,8 @@ import { WorkflowEdge } from '../workflow-edges/domain/workflow-edge';
 import { Task } from '../tasks/domain/task';
 import { User } from '../users/domain/user';
 import { AuthProvidersEnum } from '../auth/auth-providers.enum';
+import { RoleEnum } from '../roles/roles.enum';
+import { StatusEnum } from '../statuses/statuses.enum';
 import { WorkflowRepository } from '../workflows/infrastructure/persistence/workflow.repository';
 import { WorkflowNodeRepository } from '../workflow-nodes/infrastructure/persistence/workflow-node.repository';
 import { WorkflowEdgeRepository } from '../workflow-edges/infrastructure/persistence/workflow-edge.repository';
@@ -18,6 +20,8 @@ import {
   type WorkflowSavedJsonSourceType,
 } from '../workflow-json-storage/workflow-json-storage.service';
 import { WorkflowAssignmentView } from '../workflow-assignments/workflow-assignments.types';
+import { Script, createContext } from 'node:vm';
+import bcrypt from 'bcryptjs';
 
 type NodeConfig = Record<string, unknown>;
 type WorkflowEventType =
@@ -72,6 +76,29 @@ type WorkflowExecutionResult = {
   pausedFormAssignments: WorkflowAssignmentView[];
 };
 
+type NodeExecutionOutcome =
+  | { kind: 'continueAll' }
+  | { kind: 'stop'; haltWorkflow?: boolean }
+  | { kind: 'route'; routeKey: string };
+
+type OutgoingEdgeTarget = {
+  targetId: string;
+  routeKey: string | null;
+};
+
+type StructuredDecisionRule = {
+  id: string;
+  left: unknown;
+  operator: string;
+  right: unknown;
+};
+
+type JavascriptInputRow = {
+  id: string;
+  name: string;
+  value: unknown;
+};
+
 @Injectable()
 export class ProjectWorkflowAutomationService {
   private readonly logger = new Logger(ProjectWorkflowAutomationService.name);
@@ -92,11 +119,18 @@ export class ProjectWorkflowAutomationService {
   private readonly createUserActionType = 'action_create_user';
   private readonly formBuilderActionType = 'action_form_builder';
   private readonly httpRequestActionType = 'action_http_request';
+  private readonly javascriptCodeActionType = 'action_javascript_code';
+  private readonly decisionIfType = 'decision_if';
+  private readonly decisionSwitchType = 'decision_switch';
   private readonly decisionConditionType = 'decision_condition';
+  private readonly decisionConditionMaxDepth = 12;
   private readonly assignmentUserConfigKey = 'assignedUserId';
+  private readonly defaultWorkflowUserRoleId = RoleEnum.user;
+  private readonly defaultWorkflowUserStatusId = StatusEnum.active;
   private readonly httpRequestTimeoutMs = 15000;
+  private readonly javascriptExecutionTimeoutMs = 120;
   private readonly conditionExpressionRegex =
-    /^\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(==|!=|>=|<=|>|<|contains|startsWith|endsWith)\s*(.+)\s*$/i;
+    /^\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(==|!=|>=|<=|>|<|contains|notContains|startsWith|endsWith)\s*(.+)\s*$/i;
   private readonly prevTemplateTokenRegex = /\{\{\s*prev\.([^{}]*?)\s*\}\}/g;
   private readonly genericTemplateTokenRegex = /\{\{\s*[^{}]*\s*\}\}/g;
 
@@ -367,7 +401,9 @@ export class ProjectWorkflowAutomationService {
     }
 
     const outgoingMap = this.mapOutgoingEdges(edges, nodeById);
-    const queue = [...(outgoingMap.get(sourceNodeId) ?? [])];
+    const queue = this.collectOutgoingTargetIds(
+      outgoingMap.get(sourceNodeId) ?? [],
+    );
     if (!queue.length) {
       return {
         pausedFormAssignments: [],
@@ -381,7 +417,11 @@ export class ProjectWorkflowAutomationService {
     };
     await this.hydrateContextWithWorkflowSavedJsons(workflowId, context);
 
-    const visited = new Set<string>([sourceNodeId]);
+    // In resume flows we start from outgoing nodes of the source form node.
+    // Do not pre-mark sourceNodeId as visited, otherwise branches that
+    // intentionally return to that form (e.g. switch:default -> form)
+    // cannot re-open the form assignment.
+    const visited = new Set<string>();
     const pausedFormAssignments: WorkflowAssignmentView[] = [];
 
     while (queue.length > 0) {
@@ -396,9 +436,9 @@ export class ProjectWorkflowAutomationService {
         continue;
       }
 
-      let shouldContinue = true;
+      let outcome: NodeExecutionOutcome = { kind: 'continueAll' };
       try {
-        shouldContinue = await this.executeNode(
+        outcome = await this.executeNode(
           node,
           context,
           workflow.id,
@@ -408,17 +448,20 @@ export class ProjectWorkflowAutomationService {
         this.logger.warn(
           `No se pudo reanudar nodo ${node.id} (${node.type}) en workflow ${workflow.id}.`,
         );
-        shouldContinue = false;
+        outcome = { kind: 'stop' };
       }
 
-      if (!shouldContinue) {
-        if (node.type === this.formBuilderActionType) {
+      if (outcome.kind === 'stop') {
+        if (outcome.haltWorkflow) {
           break;
         }
         continue;
       }
 
-      const nextNodeIds = outgoingMap.get(nodeId) ?? [];
+      const nextNodeIds = this.resolveNextNodeIdsByOutcome(
+        outgoingMap.get(nodeId) ?? [],
+        outcome,
+      );
       for (const nextNodeId of nextNodeIds) {
         if (!visited.has(nextNodeId)) {
           queue.push(nextNodeId);
@@ -533,9 +576,9 @@ export class ProjectWorkflowAutomationService {
         continue;
       }
 
-      let shouldContinue = true;
+      let outcome: NodeExecutionOutcome = { kind: 'continueAll' };
       try {
-        shouldContinue = await this.executeNode(
+        outcome = await this.executeNode(
           node,
           context,
           workflow.id,
@@ -545,17 +588,20 @@ export class ProjectWorkflowAutomationService {
         this.logger.warn(
           `No se pudo ejecutar nodo ${node.id} (${node.type}) en workflow ${workflow.id}.`,
         );
-        shouldContinue = false;
+        outcome = { kind: 'stop' };
       }
 
-      if (!shouldContinue) {
-        if (node.type === this.formBuilderActionType) {
+      if (outcome.kind === 'stop') {
+        if (outcome.haltWorkflow) {
           break;
         }
         continue;
       }
 
-      const nextNodeIds = outgoingMap.get(nodeId) ?? [];
+      const nextNodeIds = this.resolveNextNodeIdsByOutcome(
+        outgoingMap.get(nodeId) ?? [],
+        outcome,
+      );
       for (const nextNodeId of nextNodeIds) {
         if (!visited.has(nextNodeId)) {
           queue.push(nextNodeId);
@@ -573,20 +619,36 @@ export class ProjectWorkflowAutomationService {
     context: ConditionContext,
     workflowId: string,
     pausedFormAssignments: WorkflowAssignmentView[] = [],
-  ): Promise<boolean> {
-    if (node.type === this.createProjectActionType) {
-      return this.executeCreateProjectAction(node, context, workflowId);
+  ): Promise<NodeExecutionOutcome> {
+    const nodeType = this.normalizeNodeType(node.type);
+    if (nodeType === this.createProjectActionType) {
+      const executed = await this.executeCreateProjectAction(
+        node,
+        context,
+        workflowId,
+      );
+      return executed ? { kind: 'continueAll' } : { kind: 'stop' };
     }
 
-    if (node.type === this.createTaskActionType) {
-      return this.executeCreateTaskAction(node, context, workflowId);
+    if (nodeType === this.createTaskActionType) {
+      const executed = await this.executeCreateTaskAction(
+        node,
+        context,
+        workflowId,
+      );
+      return executed ? { kind: 'continueAll' } : { kind: 'stop' };
     }
 
-    if (node.type === this.createUserActionType) {
-      return this.executeCreateUserAction(node, context, workflowId);
+    if (nodeType === this.createUserActionType) {
+      const executed = await this.executeCreateUserAction(
+        node,
+        context,
+        workflowId,
+      );
+      return executed ? { kind: 'continueAll' } : { kind: 'stop' };
     }
 
-    if (node.type === this.formBuilderActionType) {
+    if (nodeType === this.formBuilderActionType) {
       const pausedAssignment = await this.executeFormBuilderAction(
         node,
         context,
@@ -595,23 +657,59 @@ export class ProjectWorkflowAutomationService {
       if (pausedAssignment) {
         pausedFormAssignments.push(pausedAssignment);
       }
-      return false;
+      return {
+        kind: 'stop',
+        haltWorkflow: true,
+      };
     }
 
-    if (node.type === this.webhookTriggerType) {
+    if (nodeType === this.webhookTriggerType) {
       await this.executeWebhookTriggerNode(node, context, workflowId);
-      return true;
+      return { kind: 'continueAll' };
     }
 
-    if (node.type === this.httpRequestActionType) {
-      return this.executeHttpRequestAction(node, context, workflowId);
+    if (nodeType === this.httpRequestActionType) {
+      const executed = await this.executeHttpRequestAction(
+        node,
+        context,
+        workflowId,
+      );
+      return executed ? { kind: 'continueAll' } : { kind: 'stop' };
     }
 
-    if (node.type === this.decisionConditionType) {
-      return this.evaluateDecisionCondition(node, context);
+    if (nodeType === this.javascriptCodeActionType) {
+      const executed = await this.executeJavascriptCodeAction(
+        node,
+        context,
+        workflowId,
+      );
+      return executed ? { kind: 'continueAll' } : { kind: 'stop' };
     }
 
-    return true;
+    if (nodeType === this.decisionIfType) {
+      const routeKey = this.evaluateDecisionIfRoute(node, context);
+      return {
+        kind: 'route',
+        routeKey,
+      };
+    }
+
+    if (nodeType === this.decisionSwitchType) {
+      const routeKey = this.evaluateDecisionSwitchRoute(node, context);
+      return {
+        kind: 'route',
+        routeKey,
+      };
+    }
+
+    if (nodeType === this.decisionConditionType) {
+      this.logger.warn(
+        `Nodo decision legacy ${node.id} (${this.decisionConditionType}) no soportado. Se detiene esa rama del flujo.`,
+      );
+      return { kind: 'stop' };
+    }
+
+    return { kind: 'continueAll' };
   }
 
   private async executeCreateProjectAction(
@@ -808,6 +906,15 @@ export class ProjectWorkflowAutomationService {
         context,
         missingVariables,
       );
+    const configuredPassword =
+      this.resolveConfigStringWithPreviousJsonWithMetadata(
+        config,
+        'password',
+        context,
+        missingVariables,
+      );
+    const roleId = this.resolveWorkflowUserRoleId(config['roleId']);
+    const statusId = this.resolveWorkflowUserStatusId(config['statusId']);
     if (missingVariables.size > 0) {
       this.logger.warn(
         `Nodo ${node.id} (${node.type}) pospuesto en workflow ${workflowId}: faltan variables prev (${Array.from(missingVariables).join(', ')}).`,
@@ -834,6 +941,11 @@ export class ProjectWorkflowAutomationService {
           firstName,
           lastName,
           email: configuredEmail ?? '',
+          ...(configuredPassword?.trim()
+            ? { password: configuredPassword.trim() }
+            : {}),
+          roleId,
+          statusId,
         },
         contextData: this.buildAssignmentContextData(context),
       });
@@ -841,17 +953,24 @@ export class ProjectWorkflowAutomationService {
     }
 
     const uniqueEmail = await this.resolveUniqueUserEmail(configuredEmail, context);
+    const passwordHash = await this.resolveWorkflowUserPasswordHash(
+      configuredPassword,
+    );
 
     const payload: Omit<User, 'id' | 'createdAt' | 'deletedAt' | 'updatedAt'> = {
       email: uniqueEmail,
-      password: undefined,
+      password: passwordHash ?? undefined,
       provider: AuthProvidersEnum.email,
       socialId: null,
       firstName,
       lastName,
       photo: undefined,
-      role: undefined,
-      status: undefined,
+      role: {
+        id: roleId,
+      },
+      status: {
+        id: statusId,
+      },
     };
 
     try {
@@ -1035,6 +1154,106 @@ export class ProjectWorkflowAutomationService {
     }
   }
 
+  private async executeJavascriptCodeAction(
+    node: WorkflowNode,
+    context: ConditionContext,
+    workflowId: string,
+  ): Promise<boolean> {
+    const config = this.parseNodeConfig(node.config);
+    const inputRows = this.parseJavascriptInputRows(config['inputs']);
+    const inputValues: Record<string, unknown> = {};
+    const usedNames = new Set<string>();
+    const missingVariables = new Set<string>();
+
+    for (const row of inputRows) {
+      const inputName = this.normalizeJavascriptInputName(row.name);
+      if (!inputName || !this.isValidJavascriptIdentifier(inputName)) {
+        this.logger.warn(
+          `Nodo JS ${node.id} invalido en workflow ${workflowId}: nombre de input invalido "${row.name}".`,
+        );
+        return false;
+      }
+
+      const normalizedInputName = inputName.toLowerCase();
+      if (usedNames.has(normalizedInputName)) {
+        this.logger.warn(
+          `Nodo JS ${node.id} invalido en workflow ${workflowId}: input duplicado "${inputName}".`,
+        );
+        return false;
+      }
+      usedNames.add(normalizedInputName);
+
+      const resolvedInputValue = this.resolveTemplatesInValueWithMetadata(
+        row.value,
+        context,
+        missingVariables,
+      );
+      inputValues[inputName] = this.parseJavascriptRuntimeValue(
+        resolvedInputValue,
+      );
+    }
+
+    if (missingVariables.size > 0) {
+      this.logger.warn(
+        `Nodo JS ${node.id} pospuesto en workflow ${workflowId}: faltan variables prev (${Array.from(missingVariables).join(', ')}).`,
+      );
+      return false;
+    }
+
+    const rawCode = config['code'];
+    const javascriptCode =
+      typeof rawCode === 'string' ? rawCode.trim() : '';
+    if (!javascriptCode) {
+      this.logger.warn(
+        `Nodo JS ${node.id} no tiene codigo configurado en workflow ${workflowId}.`,
+      );
+      return false;
+    }
+
+    if (!this.hasReturnStatement(javascriptCode)) {
+      this.logger.warn(
+        `Nodo JS ${node.id} invalido en workflow ${workflowId}: el codigo debe incluir al menos un return.`,
+      );
+      return false;
+    }
+
+    if (this.hasForbiddenJavascriptTokens(javascriptCode)) {
+      this.logger.warn(
+        `Nodo JS ${node.id} invalido en workflow ${workflowId}: el codigo contiene tokens no permitidos.`,
+      );
+      return false;
+    }
+
+    const executionResult = this.executeJavascriptCode(
+      javascriptCode,
+      inputValues,
+      node.id,
+      workflowId,
+    );
+    if (!executionResult.ok) {
+      return false;
+    }
+
+    const resultKey = this.normalizeJavascriptResultKey(config['resultKey']);
+    const resultPayload = this.buildJavascriptResultPayload(
+      resultKey,
+      executionResult.value,
+    );
+
+    await this.workflowJsonStorageService.syncJavascriptExecutionResult({
+      workflowId,
+      workflowNodeId: node.id,
+      nodeLabel: node.label,
+      resultPayload,
+    });
+    await this.hydrateContextWithWorkflowSavedJsons(workflowId, context);
+
+    this.logger.log(
+      `Nodo JS ${node.id} ejecutado en workflow ${workflowId}.`,
+    );
+    return true;
+  }
+
   private async executeWebhookTriggerNode(
     node: WorkflowNode,
     context: ConditionContext,
@@ -1069,6 +1288,7 @@ export class ProjectWorkflowAutomationService {
         if (
           row.sourceType !== 'form_json' &&
           row.sourceType !== 'http_json' &&
+          row.sourceType !== 'javascript_json' &&
           row.sourceType !== 'webhook_json'
         ) {
           continue;
@@ -1170,12 +1390,186 @@ export class ProjectWorkflowAutomationService {
     return Array.from(new Set(normalized));
   }
 
+  private evaluateDecisionIfRoute(
+    node: WorkflowNode,
+    context: ConditionContext,
+  ): string {
+    const config = this.parseNodeConfig(node.config);
+    const rules = this.readStructuredDecisionRules(config['rules']);
+    if (!rules.length) {
+      this.logger.warn(
+        `Nodo if ${node.id} sin reglas configuradas. Se enruta por if:false.`,
+      );
+      return 'if:false';
+    }
+
+    const logicalOperator = this.normalizeDecisionLogicalOperator(
+      config['logicalOperator'],
+    );
+    if (logicalOperator === 'AND') {
+      for (const rule of rules) {
+        if (!this.evaluateStructuredDecisionRule(rule, context, node.id)) {
+          return 'if:false';
+        }
+      }
+      return 'if:true';
+    }
+
+    for (const rule of rules) {
+      if (this.evaluateStructuredDecisionRule(rule, context, node.id)) {
+        return 'if:true';
+      }
+    }
+
+    return 'if:false';
+  }
+
+  private evaluateDecisionSwitchRoute(
+    node: WorkflowNode,
+    context: ConditionContext,
+  ): string {
+    const config = this.parseNodeConfig(node.config);
+    const cases = this.readStructuredDecisionRules(config['cases']);
+    if (!cases.length) {
+      this.logger.warn(
+        `Nodo switch ${node.id} sin cases configurados. Se enruta por switch:default.`,
+      );
+      return 'switch:default';
+    }
+
+    for (const switchCase of cases) {
+      const caseId = switchCase.id.trim();
+      if (!caseId) {
+        continue;
+      }
+
+      const isMatch = this.evaluateStructuredDecisionRule(
+        switchCase,
+        context,
+        node.id,
+      );
+      if (isMatch) {
+        return `switch:case:${caseId}`;
+      }
+    }
+
+    return 'switch:default';
+  }
+
+  private readStructuredDecisionRules(value: unknown): StructuredDecisionRule[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const rules: StructuredDecisionRule[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const rawRule = value[index];
+      if (!this.isPlainObject(rawRule)) {
+        continue;
+      }
+
+      const record = rawRule as Record<string, unknown>;
+      const idValue = record['id'];
+      const operatorValue = record['operator'];
+      const ruleId =
+        typeof idValue === 'string' && idValue.trim()
+          ? idValue.trim()
+          : `rule-${index + 1}`;
+      const operator =
+        typeof operatorValue === 'string' ? operatorValue.trim() : '';
+      if (!operator) {
+        continue;
+      }
+
+      rules.push({
+        id: ruleId,
+        left: record['left'],
+        operator,
+        right: record['right'],
+      });
+    }
+
+    return rules;
+  }
+
+  private normalizeDecisionLogicalOperator(value: unknown): 'AND' | 'OR' {
+    if (typeof value !== 'string') {
+      return 'AND';
+    }
+
+    const normalized = value.trim().toUpperCase();
+    if (normalized === 'OR') {
+      return 'OR';
+    }
+
+    return 'AND';
+  }
+
+  private evaluateStructuredDecisionRule(
+    rule: StructuredDecisionRule,
+    context: ConditionContext,
+    nodeId: string,
+  ): boolean {
+    const leftResolution = this.resolveDecisionOperandValue(rule.left, context);
+    if (leftResolution.missingVariables.length > 0) {
+      this.logger.warn(
+        `Nodo decision ${nodeId} no pudo resolver variables prev en left (${leftResolution.missingVariables.join(', ')}).`,
+      );
+      return false;
+    }
+
+    const rightResolution = this.resolveDecisionOperandValue(rule.right, context);
+    if (rightResolution.missingVariables.length > 0) {
+      this.logger.warn(
+        `Nodo decision ${nodeId} no pudo resolver variables prev en right (${rightResolution.missingVariables.join(', ')}).`,
+      );
+      return false;
+    }
+
+    const leftValue = this.resolveOperandPathFallback(
+      leftResolution.value,
+      context,
+    );
+    const rightValue = this.resolveOperandPathFallback(
+      rightResolution.value,
+      context,
+    );
+
+    return this.evaluateOperator(leftValue, rule.operator, rightValue);
+  }
+
+  private resolveOperandPathFallback(
+    value: unknown,
+    context: ConditionContext,
+  ): unknown {
+    if (typeof value !== 'string') {
+      return value;
+    }
+
+    const normalized = value.trim();
+    if (!normalized || !this.looksLikePath(normalized)) {
+      return value;
+    }
+
+    const resolved = this.resolvePathValue(normalized, context);
+    if (resolved === undefined) {
+      return value;
+    }
+
+    return resolved;
+  }
+
   private evaluateDecisionCondition(
     node: WorkflowNode,
     context: ConditionContext,
   ): boolean {
     const config = this.parseNodeConfig(node.config);
-    const byRule = this.evaluateDecisionByRule(config, context);
+    const byTree = this.evaluateDecisionByTree(config, context, node.id);
+    if (byTree !== null) {
+      return byTree;
+    }
+
+    const byRule = this.evaluateDecisionByRule(config, context, node.id);
     if (byRule !== null) {
       return byRule;
     }
@@ -1188,23 +1582,292 @@ export class ProjectWorkflowAutomationService {
       return false;
     }
 
-    return this.evaluateConditionExpression(condition, context);
+    const resolvedCondition = this.resolveConditionExpressionWithPreviousJson(
+      condition,
+      context,
+      node.id,
+    );
+    if (!resolvedCondition) {
+      return false;
+    }
+
+    return this.evaluateConditionExpression(resolvedCondition, context);
+  }
+
+  private evaluateDecisionByTree(
+    config: NodeConfig,
+    context: ConditionContext,
+    nodeId: string,
+  ): boolean | null {
+    const tree = this.resolveDecisionTreeConfig(config);
+    if (!tree) {
+      return null;
+    }
+
+    return this.evaluateDecisionTreeGroup(tree, context, nodeId, 0);
   }
 
   private evaluateDecisionByRule(
     config: NodeConfig,
     context: ConditionContext,
+    nodeId: string,
+  ): boolean | null {
+    return this.evaluateDecisionRule(config, context, nodeId);
+  }
+
+  private evaluateDecisionRule(
+    config: NodeConfig,
+    context: ConditionContext,
+    nodeId: string,
   ): boolean | null {
     const field = this.readConfigString(config, 'field');
     const operator = this.readConfigString(config, 'operator');
+    const isBooleanOperator = this.isBooleanDecisionOperator(operator);
+    const valueSourceRaw =
+      this.readConfigString(config, 'valueSource')?.toLowerCase() ?? '';
+    const valuePath = this.readConfigString(config, 'valuePath');
     const hasValue = Object.prototype.hasOwnProperty.call(config, 'value');
-    if (!field || !operator || !hasValue) {
+    const compareWithField =
+      !isBooleanOperator &&
+      (valueSourceRaw === 'field' ||
+        (valueSourceRaw !== 'literal' && !!valuePath && !hasValue));
+    if (!field || !operator || (!isBooleanOperator && !compareWithField && !hasValue)) {
       return null;
     }
 
     const leftValue = this.resolvePathValue(field, context);
-    const rightValue = config['value'];
+    if (compareWithField) {
+      if (!valuePath) {
+        this.logger.warn(
+          `Nodo decision ${nodeId} tiene una condicion de comparacion por campo sin valuePath.`,
+        );
+        return false;
+      }
+
+      const rightValue = this.resolvePathValue(valuePath, context);
+      return this.evaluateOperator(leftValue, operator, rightValue);
+    }
+
+    if (isBooleanOperator) {
+      return this.evaluateOperator(leftValue, operator, config['value']);
+    }
+
+    const rightResolution = this.resolveDecisionOperandValue(
+      config['value'],
+      context,
+    );
+    if (rightResolution.missingVariables.length > 0) {
+      this.logger.warn(
+        `Nodo decision ${nodeId} no pudo resolver variables prev en condicion (${rightResolution.missingVariables.join(', ')}).`,
+      );
+      return false;
+    }
+
+    const rightValue = rightResolution.value;
     return this.evaluateOperator(leftValue, operator, rightValue);
+  }
+
+  private resolveDecisionTreeConfig(config: NodeConfig): NodeConfig | null {
+    if (this.hasDecisionTreeShape(config)) {
+      return config;
+    }
+
+    const conditionTree = config['conditionTree'];
+    if (
+      this.isPlainObject(conditionTree) &&
+      this.hasDecisionTreeShape(conditionTree)
+    ) {
+      return conditionTree;
+    }
+
+    const tree = config['tree'];
+    if (this.isPlainObject(tree) && this.hasDecisionTreeShape(tree)) {
+      return tree;
+    }
+
+    return null;
+  }
+
+  private hasDecisionTreeShape(value: unknown): value is NodeConfig {
+    if (!this.isPlainObject(value)) {
+      return false;
+    }
+
+    return (
+      typeof value['logicalOperator'] === 'string' &&
+      Array.isArray(value['conditions'])
+    );
+  }
+
+  private evaluateDecisionTreeGroup(
+    group: NodeConfig,
+    context: ConditionContext,
+    nodeId: string,
+    depth: number,
+  ): boolean {
+    if (depth > this.decisionConditionMaxDepth) {
+      this.logger.warn(
+        `Nodo decision ${nodeId} supera la profundidad maxima de condiciones (${this.decisionConditionMaxDepth}).`,
+      );
+      return false;
+    }
+
+    const rawLogicalOperator =
+      typeof group['logicalOperator'] === 'string'
+        ? group['logicalOperator'].trim().toUpperCase()
+        : '';
+    if (rawLogicalOperator !== 'AND' && rawLogicalOperator !== 'OR') {
+      this.logger.warn(
+        `Nodo decision ${nodeId} tiene operador logico invalido: "${String(group['logicalOperator'] ?? '')}".`,
+      );
+      return false;
+    }
+
+    const conditions = group['conditions'];
+    if (!Array.isArray(conditions) || conditions.length === 0) {
+      this.logger.warn(
+        `Nodo decision ${nodeId} tiene un grupo sin condiciones configuradas.`,
+      );
+      return false;
+    }
+
+    if (rawLogicalOperator === 'AND') {
+      for (const entry of conditions) {
+        if (!this.evaluateDecisionTreeNode(entry, context, nodeId, depth + 1)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    for (const entry of conditions) {
+      if (this.evaluateDecisionTreeNode(entry, context, nodeId, depth + 1)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private evaluateDecisionTreeNode(
+    value: unknown,
+    context: ConditionContext,
+    nodeId: string,
+    depth: number,
+  ): boolean {
+    if (!this.isPlainObject(value)) {
+      this.logger.warn(
+        `Nodo decision ${nodeId} contiene una condicion invalida (no es objeto).`,
+      );
+      return false;
+    }
+
+    if (this.hasDecisionTreeShape(value)) {
+      return this.evaluateDecisionTreeGroup(value, context, nodeId, depth);
+    }
+
+    const byRule = this.evaluateDecisionRule(value, context, nodeId);
+    if (byRule !== null) {
+      return byRule;
+    }
+
+    const expression = this.readConfigString(value, 'condition');
+    if (!expression) {
+      this.logger.warn(
+        `Nodo decision ${nodeId} contiene una condicion sin estructura valida.`,
+      );
+      return false;
+    }
+
+    const resolvedExpression = this.resolveConditionExpressionWithPreviousJson(
+      expression,
+      context,
+      nodeId,
+    );
+    if (!resolvedExpression) {
+      return false;
+    }
+
+    return this.evaluateConditionExpression(resolvedExpression, context);
+  }
+
+  private resolveDecisionOperandValue(
+    value: unknown,
+    context: ConditionContext,
+  ): {
+    value: unknown;
+    missingVariables: string[];
+  } {
+    const missing = new Set<string>();
+    const resolved = this.resolveTemplatesInValueWithMetadata(
+      value,
+      context,
+      missing,
+    );
+
+    return {
+      value: this.normalizeDecisionOperandValue(resolved),
+      missingVariables: Array.from(missing),
+    };
+  }
+
+  private normalizeDecisionOperandValue(value: unknown): unknown {
+    if (typeof value !== 'string') {
+      return value;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    if (trimmed === 'true') {
+      return true;
+    }
+    if (trimmed === 'false') {
+      return false;
+    }
+    if (trimmed === 'null') {
+      return null;
+    }
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+      const asNumber = Number(trimmed);
+      if (!Number.isNaN(asNumber)) {
+        return asNumber;
+      }
+    }
+
+    if (
+      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))
+    ) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return value;
+      }
+    }
+
+    return value;
+  }
+
+  private resolveConditionExpressionWithPreviousJson(
+    expression: string,
+    context: ConditionContext,
+    nodeId: string,
+  ): string {
+    const resolution = this.resolvePreviousJsonVariablesWithMetadata(
+      expression,
+      context,
+    );
+    if (resolution.missingVariables.length > 0) {
+      this.logger.warn(
+        `Nodo decision ${nodeId} no pudo resolver variables prev en expresion (${resolution.missingVariables.join(', ')}).`,
+      );
+      return '';
+    }
+
+    return resolution.value;
   }
 
   private evaluateConditionExpression(
@@ -1292,6 +1955,15 @@ export class ProjectWorkflowAutomationService {
     return trimmed;
   }
 
+  private isBooleanDecisionOperator(operator: string | null): boolean {
+    if (!operator) {
+      return false;
+    }
+
+    const normalized = operator.trim().toLowerCase();
+    return normalized === 'istrue' || normalized === 'isfalse';
+  }
+
   private evaluateOperator(
     leftValue: unknown,
     operator: string,
@@ -1314,6 +1986,8 @@ export class ProjectWorkflowAutomationService {
         return this.compareNumbers(leftValue, rightValue, (left, right) => left <= right);
       case 'contains':
         return this.containsValue(leftValue, rightValue);
+      case 'notcontains':
+        return !this.containsValue(leftValue, rightValue);
       case 'startswith':
         return (
           typeof leftValue === 'string' &&
@@ -1326,6 +2000,10 @@ export class ProjectWorkflowAutomationService {
           typeof rightValue === 'string' &&
           leftValue.endsWith(rightValue)
         );
+      case 'istrue':
+        return this.toBoolean(leftValue);
+      case 'isfalse':
+        return !this.toBoolean(leftValue);
       default:
         this.logger.warn(`Operador de condicion no soportado: "${operator}"`);
         return false;
@@ -1380,7 +2058,14 @@ export class ProjectWorkflowAutomationService {
         return null;
       }
       const numericValue = Number(trimmed);
-      return Number.isFinite(numericValue) ? numericValue : null;
+      if (Number.isFinite(numericValue)) {
+        return numericValue;
+      }
+
+      const asTimestamp = Date.parse(trimmed);
+      if (Number.isFinite(asTimestamp)) {
+        return asTimestamp;
+      }
     }
 
     return null;
@@ -1419,34 +2104,54 @@ export class ProjectWorkflowAutomationService {
   }
 
   private resolvePathValue(path: string, context: ConditionContext): unknown {
-    if (!path) {
+    const normalizedPath = path.trim();
+    if (!normalizedPath) {
       return undefined;
     }
 
-    const segments = path.split('.');
-    let cursor: unknown = context;
-
-    for (const segment of segments) {
-      if (cursor === null || cursor === undefined || typeof cursor !== 'object') {
-        return undefined;
-      }
-
-      const recordCursor = cursor as Record<string, unknown>;
-      if (!Object.prototype.hasOwnProperty.call(recordCursor, segment)) {
-        return undefined;
-      }
-
-      cursor = recordCursor[segment];
+    const direct = this.readRecordPathValue(
+      this.asRecord(context),
+      normalizedPath,
+    );
+    if (direct !== undefined) {
+      return direct;
     }
 
-    return cursor;
+    const previousJsonRecord = this.resolvePreviousJsonRecord(context);
+    const scopedValue = this.resolvePreviousJsonPathValue(
+      previousJsonRecord,
+      normalizedPath,
+    );
+    if (scopedValue !== undefined) {
+      return scopedValue;
+    }
+
+    const lowerPath = normalizedPath.toLowerCase();
+    if (lowerPath.startsWith('response.')) {
+      const responsePath = normalizedPath.slice('response.'.length).trim();
+      if (!responsePath) {
+        return undefined;
+      }
+
+      const globalResponseValue = this.resolvePreviousJsonPathValue(
+        previousJsonRecord,
+        `global.${responsePath}`,
+      );
+      if (globalResponseValue !== undefined) {
+        return globalResponseValue;
+      }
+
+      return this.resolvePreviousJsonPathValue(previousJsonRecord, responsePath);
+    }
+
+    return undefined;
   }
 
   private mapOutgoingEdges(
     edges: WorkflowEdge[],
     nodeById: Map<string, WorkflowNode>,
-  ): Map<string, string[]> {
-    const outgoing = new Map<string, string[]>();
+  ): Map<string, OutgoingEdgeTarget[]> {
+    const outgoing = new Map<string, OutgoingEdgeTarget[]>();
 
     for (const edge of edges) {
       const sourceId = edge.fromNode?.id;
@@ -1459,20 +2164,67 @@ export class ProjectWorkflowAutomationService {
       }
 
       const existingTargets = outgoing.get(sourceId) ?? [];
-      if (!existingTargets.includes(targetId)) {
-        existingTargets.push(targetId);
+      const normalizedRouteKey =
+        typeof edge.routeKey === 'string' && edge.routeKey.trim()
+          ? edge.routeKey.trim()
+          : null;
+      if (
+        !existingTargets.some(
+          (entry) =>
+            entry.targetId === targetId && entry.routeKey === normalizedRouteKey,
+        )
+      ) {
+        existingTargets.push({
+          targetId,
+          routeKey: normalizedRouteKey,
+        });
       }
       outgoing.set(sourceId, existingTargets);
     }
 
-    for (const [sourceId, targetIds] of outgoing.entries()) {
+    for (const [sourceId, targets] of outgoing.entries()) {
       outgoing.set(
         sourceId,
-        this.sortNodeIdsByVisualOrder(targetIds, nodeById),
+        this.sortOutgoingTargetsByVisualOrder(targets, nodeById),
       );
     }
 
     return outgoing;
+  }
+
+  private sortOutgoingTargetsByVisualOrder(
+    targets: OutgoingEdgeTarget[],
+    nodeById: Map<string, WorkflowNode>,
+  ): OutgoingEdgeTarget[] {
+    return [...targets].sort((left, right) =>
+      this.compareNodeVisualOrder(
+        nodeById.get(left.targetId),
+        nodeById.get(right.targetId),
+        left.targetId,
+        right.targetId,
+      ),
+    );
+  }
+
+  private collectOutgoingTargetIds(targets: OutgoingEdgeTarget[]): string[] {
+    return targets.map((target) => target.targetId);
+  }
+
+  private resolveNextNodeIdsByOutcome(
+    targets: OutgoingEdgeTarget[],
+    outcome: NodeExecutionOutcome,
+  ): string[] {
+    if (outcome.kind === 'continueAll') {
+      return this.collectOutgoingTargetIds(targets);
+    }
+
+    if (outcome.kind === 'route') {
+      return targets
+        .filter((target) => target.routeKey === outcome.routeKey)
+        .map((target) => target.targetId);
+    }
+
+    return [];
   }
 
   private sortNodeIdsByVisualOrder(
@@ -1553,6 +2305,126 @@ export class ProjectWorkflowAutomationService {
       return {};
     } catch {
       return {};
+    }
+  }
+
+  private parseJavascriptInputRows(value: unknown): JavascriptInputRow[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const rows: JavascriptInputRow[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const rowRaw = value[index];
+      if (!this.isPlainObject(rowRaw)) {
+        continue;
+      }
+
+      const id =
+        typeof rowRaw['id'] === 'string' && rowRaw['id'].trim()
+          ? rowRaw['id'].trim()
+          : `input-${index + 1}`;
+      const name =
+        typeof rowRaw['name'] === 'string' ? rowRaw['name'].trim() : '';
+
+      rows.push({
+        id,
+        name,
+        value: rowRaw['value'],
+      });
+    }
+
+    return rows;
+  }
+
+  private normalizeJavascriptInputName(value: unknown): string {
+    if (typeof value !== 'string') {
+      return '';
+    }
+
+    return value.trim();
+  }
+
+  private normalizeJavascriptResultKey(value: unknown): string {
+    if (typeof value !== 'string') {
+      return 'result';
+    }
+
+    const normalized = value.trim();
+    return normalized || 'result';
+  }
+
+  private isValidJavascriptIdentifier(value: string): boolean {
+    return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(value);
+  }
+
+  private hasReturnStatement(code: string): boolean {
+    const normalizedCode = this.stripJavascriptLiteralsAndComments(code);
+    const returnMatches = normalizedCode.match(/\breturn\b/g);
+    return Array.isArray(returnMatches) && returnMatches.length > 0;
+  }
+
+  private hasForbiddenJavascriptTokens(code: string): boolean {
+    const normalizedCode = this.stripJavascriptLiteralsAndComments(code);
+    return /\b(require|process|globalThis|Function|eval|import|module|exports)\b/.test(
+      normalizedCode,
+    );
+  }
+
+  private stripJavascriptLiteralsAndComments(code: string): string {
+    return code
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/\/\/[^\n\r]*/g, ' ')
+      .replace(/"(?:\\.|[^"\\])*"/g, '""')
+      .replace(/'(?:\\.|[^'\\])*'/g, "''")
+      .replace(/`(?:\\.|[^`\\])*`/g, '``');
+  }
+
+  private executeJavascriptCode(
+    code: string,
+    inputValues: Record<string, unknown>,
+    nodeId: string,
+    workflowId: string,
+  ): { ok: boolean; value: unknown } {
+    const sandbox: Record<string, unknown> = Object.create(null);
+    for (const [name, value] of Object.entries(inputValues)) {
+      sandbox[name] = value;
+    }
+
+    sandbox['Math'] = Math;
+    sandbox['JSON'] = JSON;
+    sandbox['Number'] = Number;
+    sandbox['String'] = String;
+    sandbox['Boolean'] = Boolean;
+    sandbox['Array'] = Array;
+    sandbox['Object'] = Object;
+    sandbox['Date'] = Date;
+
+    const wrappedCode = `'use strict';\n(() => {\n${code}\n})()`;
+
+    try {
+      const script = new Script(wrappedCode, {
+        filename: `workflow-${workflowId}-node-${nodeId}.js`,
+      });
+      const context = createContext(sandbox);
+      const value = script.runInContext(context, {
+        timeout: this.javascriptExecutionTimeoutMs,
+      });
+
+      return {
+        ok: true,
+        value,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Nodo JS ${nodeId} fallo en workflow ${workflowId}: ${
+          error instanceof Error ? error.message : 'error de ejecucion'
+        }.`,
+      );
+      return {
+        ok: false,
+        value: null,
+      };
     }
   }
 
@@ -1854,6 +2726,7 @@ export class ProjectWorkflowAutomationService {
     if (
       !Object.keys(workflowJsonBySource.form_json).length &&
       !Object.keys(workflowJsonBySource.http_json).length &&
+      !Object.keys(workflowJsonBySource.javascript_json).length &&
       !Object.keys(workflowJsonBySource.webhook_json).length
     ) {
       return {};
@@ -1863,6 +2736,7 @@ export class ProjectWorkflowAutomationService {
       workflow: workflowScope,
       form_json: workflowJsonBySource.form_json,
       http_json: workflowJsonBySource.http_json,
+      javascript_json: workflowJsonBySource.javascript_json,
       webhook_json: workflowJsonBySource.webhook_json,
       global: globalScope,
     };
@@ -1903,6 +2777,7 @@ export class ProjectWorkflowAutomationService {
     return {
       form_json: {},
       http_json: {},
+      javascript_json: {},
       webhook_json: {},
     };
   }
@@ -1915,6 +2790,7 @@ export class ProjectWorkflowAutomationService {
     return {
       form_json: { ...source.form_json },
       http_json: { ...source.http_json },
+      javascript_json: { ...source.javascript_json },
       webhook_json: { ...source.webhook_json },
     };
   }
@@ -1989,6 +2865,8 @@ export class ProjectWorkflowAutomationService {
         ? 'form'
         : sourceType === 'http_json'
           ? 'http'
+          : sourceType === 'javascript_json'
+            ? 'js'
           : 'webhook';
     const baseLabel =
       this.normalizeWorkflowJsonAliasSegment(nodeLabel ?? '') ||
@@ -2257,6 +3135,40 @@ export class ProjectWorkflowAutomationService {
     }
   }
 
+  private parseJavascriptRuntimeValue(value: unknown): unknown {
+    if (typeof value !== 'string') {
+      return value;
+    }
+
+    const normalized = value.trim();
+    if (!normalized) {
+      return '';
+    }
+
+    if (normalized === 'undefined') {
+      return undefined;
+    }
+
+    if (/^'(?:\\.|[^'\\])*'$/.test(normalized)) {
+      return normalized.slice(1, -1).replace(/\\'/g, "'");
+    }
+
+    try {
+      return JSON.parse(normalized);
+    } catch {
+      return value;
+    }
+  }
+
+  private buildJavascriptResultPayload(
+    resultKey: string,
+    value: unknown,
+  ): Record<string, unknown> {
+    return {
+      [resultKey]: value,
+    };
+  }
+
   private readResponsePreview(responseText: string): string {
     const normalized = responseText.trim();
     if (!normalized) {
@@ -2511,6 +3423,13 @@ export class ProjectWorkflowAutomationService {
     );
   }
 
+  private normalizeNodeType(nodeTypeRaw: unknown): string {
+    return String(nodeTypeRaw ?? '')
+      .trim()
+      .toLowerCase()
+      .replaceAll('-', '_');
+  }
+
   private async resolveUniqueUserEmail(
     configuredEmail: string | null,
     context: ConditionContext,
@@ -2576,6 +3495,37 @@ export class ProjectWorkflowAutomationService {
     }
 
     return null;
+  }
+
+  private resolveWorkflowUserRoleId(value: unknown): number {
+    const parsed = this.normalizeUserIdNumber(value);
+    if (parsed === RoleEnum.admin || parsed === RoleEnum.user) {
+      return parsed;
+    }
+
+    return this.defaultWorkflowUserRoleId;
+  }
+
+  private resolveWorkflowUserStatusId(value: unknown): number {
+    const parsed = this.normalizeUserIdNumber(value);
+    if (parsed === StatusEnum.active || parsed === StatusEnum.inactive) {
+      return parsed;
+    }
+
+    return this.defaultWorkflowUserStatusId;
+  }
+
+  private async resolveWorkflowUserPasswordHash(
+    passwordRaw: string | null | undefined,
+  ): Promise<string | null> {
+    const normalizedPassword =
+      typeof passwordRaw === 'string' ? passwordRaw.trim() : '';
+    if (!normalizedPassword) {
+      return null;
+    }
+
+    const salt = await bcrypt.genSalt();
+    return bcrypt.hash(normalizedPassword, salt);
   }
 
   private normalizeEntityId(value: unknown): string | null {
