@@ -1,4 +1,10 @@
-export const URL_BASE = "http://localhost:3000/api/v1"
+const runtimeHost =
+  typeof window !== 'undefined' && window.location?.hostname
+    ? window.location.hostname
+    : 'localhost';
+
+export const URL_BASE = `http://${runtimeHost}:3000/api/v1`
+//export const URL_BASE = "http://localhost:3000/api/v1"
 export const URL_LOGIN = `${URL_BASE}/auth/email/login`
 export const URL_PROJECT = `${URL_BASE}/projects`
 export const URL_REFRESH = `${URL_BASE}/auth/refresh`

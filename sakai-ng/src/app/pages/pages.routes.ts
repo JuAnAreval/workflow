@@ -4,9 +4,9 @@ import { Crud } from './crud/crud';
 import { Empty } from './empty/empty';
 import { Project } from './project/project';
 import { Task } from './task/task';
-import { Workflow } from './workflow/workflow';
-import { WorkflowList } from './workflow-list/workflow-list';
-import { WorkflowInbox } from './workflow-inbox/workflow-inbox';
+import { WorkflowEditorPage } from './workflow/editor/workflow-editor.page';
+import { WorkflowList } from './workflow/list/workflow-list.page';
+import { WorkflowInbox } from './workflow/inbox/workflow-inbox.page';
 import { roleGuard } from '../guards/role.guard';
 
 export default [
@@ -24,7 +24,7 @@ export default [
     },
     {
         path: 'workflow/editor/:id',
-        component: Workflow,
+        component: WorkflowEditorPage,
         canActivate: [roleGuard],
         data: { roles: ['Admin', 'User'] }
     },

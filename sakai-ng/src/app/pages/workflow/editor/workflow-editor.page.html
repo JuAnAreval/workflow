@@ -1,0 +1,2543 @@
+<section class="workflow-shell">
+<div class="board-wrap" [class.connect-mode]="isConnectMode" [class.menu-open]="isRightMenuOpen">
+  <header class="workflow-topbar">
+    <div class="topbar-identity">
+      <div class="topbar-headline">
+        <h1>Workflow Builder</h1>
+        <div class="topbar-state">
+          @if (isExecutingManual) {
+            <span class="state-pill saving">Ejecutando</span>
+          } @else if (isLoading) {
+            <span class="state-pill loading">Cargando</span>
+          } @else if (isSaving) {
+            <span class="state-pill saving">Guardando</span>
+          } @else {
+            <span class="state-pill ready">Listo</span>
+          }
+
+          @if (isConnectMode) {
+            <span class="state-pill connect">Modo conectar</span>
+          }
+        </div>
+      </div>
+      @if (activeWorkflowId) {
+        <p class="topbar-context">{{ activeWorkflowName }}</p>
+      } @else {
+        <p class="topbar-context">Sin workflow activo</p>
+      }
+    </div>
+
+    <div class="topbar-actions">
+      <button type="button" class="topbar-btn topbar-btn-strong" (click)="goToWorkflowList()">
+        <i class="pi pi-list"></i>
+        Workflows
+      </button>
+      <button
+        type="button"
+        class="topbar-btn"
+        [disabled]="!activeWorkflowId || isSaving"
+        (click)="renameActiveWorkflow()"
+      >
+        <i class="pi pi-pencil"></i>
+        Renombrar
+      </button>
+      <button
+        type="button"
+        class="topbar-btn"
+        [disabled]="!activeWorkflowId || isLoading"
+        (click)="reloadWorkflow()"
+      >
+        <i class="pi pi-refresh"></i>
+        Recargar
+      </button>
+      <button
+        type="button"
+        class="topbar-btn"
+        [disabled]="!activeWorkflowId || isLoading || isSaving || isExecutingManual"
+        (click)="executeManualWorkflow()"
+      >
+        <i class="pi pi-play"></i>
+        Ejecutar
+      </button>
+      <button type="button" class="topbar-btn" (click)="runAutoLayout()">
+        <i class="pi pi-sitemap"></i>
+        Layout
+      </button>
+      <button type="button" class="topbar-btn" (click)="fitView()">
+        <i class="pi pi-expand"></i>
+        Centrar
+      </button>
+    </div>
+  </header>
+
+  <div
+    #cyContainer
+    class="canvas"
+    (dragover)="onCanvasDragOver($event)"
+    (drop)="onCanvasDrop($event)"
+  ></div>
+
+  @if (!hasTriggerNode) {
+    <section class="onboarding-card">
+      <h2>Empieza por el trigger</h2>
+      <p>
+        Define si el flujo inicia por evento de proyecto/tarea/usuario, por webhook,
+        por ejecucion manual o por programacion.
+      </p>
+      <button type="button" class="onboarding-btn" (click)="createInitialTrigger()">
+        Elegir trigger inicial
+      </button>
+    </section>
+  }
+
+  <p-drawer
+    [(visible)]="isRightMenuOpen"
+    position="right"
+    [modal]="false"
+    [dismissible]="false"
+    [closable]="false"
+    [showCloseIcon]="false"
+    [baseZIndex]="1100"
+    [style]="getRightDrawerStyle()"
+    [styleClass]="getRightDrawerStyleClass()"
+  >
+    <div class="right-menu">
+    <div class="menu-header">
+      <h2>{{ rightMenuMode === 'edit' ? 'Editor de nodo' : 'Biblioteca de nodos' }}</h2>
+      <button
+        type="button"
+        class="menu-close-btn"
+        aria-label="Cerrar panel"
+        (click)="closeRightMenu()"
+      >
+        <i class="pi pi-times"></i>
+      </button>
+    </div>
+
+    @if (rightMenuMode === 'edit') {
+      @if (editNodeId) {
+        <div class="node-editor">
+          <p class="node-meta">
+            <strong>Tipo:</strong>
+            <span>{{ editNodeType || '-' }}</span>
+          </p>
+
+          <label class="menu-field">
+            <span>Texto del nodo</span>
+            <input
+              type="text"
+              class="menu-input"
+              [value]="editNodeLabel"
+              (input)="onNodeLabelInput($event)"
+              placeholder="Nombre descriptivo"
+            />
+          </label>
+
+          @if (isTriggerEditor() && (!useRawConfigEditor || isScheduleTriggerEditor())) {
+            <div class="visual-card">
+              @if (isManualTriggerEditor()) {
+                <p class="visual-title">Trigger manual</p>
+                <p class="menu-empty">
+                  Este nodo se activa solo cuando uses el boton Ejecutar.
+                </p>
+              } @else if (isScheduleTriggerEditor()) {
+                <p class="visual-title">Trigger programado</p>
+                <p class="menu-empty">
+                  Ejecuta el workflow por fecha fija o de forma automatizada sin catch-up.
+                </p>
+
+                <div class="schedule-form" style="display:grid;gap:.62rem;">
+                  <section
+                    class="schedule-section"
+                    style="display:grid;gap:.4rem;border:1px solid #d6e5f3;border-radius:.72rem;padding:.62rem;background:rgba(255,255,255,.86);"
+                  >
+                    <p
+                      class="schedule-section-title"
+                      style="margin:0;color:#355474;font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;"
+                    >
+                      Activacion
+                    </p>
+                    <label class="check-row">
+                      <input
+                        type="checkbox"
+                        [checked]="triggerScheduleEnabled"
+                        (change)="onScheduleEnabledToggle($event)"
+                      />
+                      <span>Trigger activo</span>
+                    </label>
+                  </section>
+
+                  <section
+                    class="schedule-section"
+                    style="display:grid;gap:.4rem;border:1px solid #d6e5f3;border-radius:.72rem;padding:.62rem;background:rgba(255,255,255,.86);"
+                  >
+                    <p
+                      class="schedule-section-title"
+                      style="margin:0;color:#355474;font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;"
+                    >
+                      Modo de ejecucion
+                    </p>
+                    <div
+                      class="schedule-mode-toggle"
+                      style="display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.42rem;"
+                    >
+                      <label
+                        class="schedule-mode-option"
+                        [class.active]="triggerScheduleMode === 'once'"
+                        [style.border]="'1px solid ' + (triggerScheduleMode === 'once' ? '#99bbe2' : '#d2e2f1')"
+                        [style.background]="triggerScheduleMode === 'once' ? '#edf5ff' : '#ffffff'"
+                        [style.color]="triggerScheduleMode === 'once' ? '#244e7e' : '#3e5f82'"
+                        style="border-radius:.5rem;padding:.4rem .52rem;display:flex;align-items:center;gap:.38rem;cursor:pointer;font-size:.82rem;"
+                      >
+                        <input
+                          type="radio"
+                          name="schedule-mode"
+                          value="once"
+                          [checked]="triggerScheduleMode === 'once'"
+                          (change)="onScheduleModeChange($event)"
+                        />
+                        <span>Una vez (fecha fija)</span>
+                      </label>
+                      <label
+                        class="schedule-mode-option"
+                        [class.active]="triggerScheduleMode === 'recurring'"
+                        [style.border]="'1px solid ' + (triggerScheduleMode === 'recurring' ? '#99bbe2' : '#d2e2f1')"
+                        [style.background]="triggerScheduleMode === 'recurring' ? '#edf5ff' : '#ffffff'"
+                        [style.color]="triggerScheduleMode === 'recurring' ? '#244e7e' : '#3e5f82'"
+                        style="border-radius:.5rem;padding:.4rem .52rem;display:flex;align-items:center;gap:.38rem;cursor:pointer;font-size:.82rem;"
+                      >
+                        <input
+                          type="radio"
+                          name="schedule-mode"
+                          value="recurring"
+                          [checked]="triggerScheduleMode === 'recurring'"
+                          (change)="onScheduleModeChange($event)"
+                        />
+                        <span>Recurrente (automatizado)</span>
+                      </label>
+                    </div>
+                  </section>
+
+                  <div
+                    class="schedule-config-shell"
+                    [style.opacity]="triggerScheduleEnabled ? '1' : '0.56'"
+                    [style.pointerEvents]="triggerScheduleEnabled ? 'auto' : 'none'"
+                    style="display:grid;gap:.52rem;"
+                  >
+                    <section
+                      class="schedule-section schedule-animated-panel"
+                      style="display:grid;gap:.4rem;border:1px solid #d6e5f3;border-radius:.72rem;padding:.62rem;background:rgba(255,255,255,.86);"
+                    >
+                      <p
+                        class="schedule-section-title"
+                        style="margin:0;color:#355474;font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;"
+                      >
+                        Configuracion horaria
+                      </p>
+                      @if (triggerScheduleMode === 'once') {
+                        <label class="menu-field">
+                          <span>Fecha y hora</span>
+                          <input
+                            type="datetime-local"
+                            class="menu-input"
+                            step="1"
+                            [value]="getScheduleOnceAtInputValue()"
+                            (input)="onScheduleOnceAtInput($event)"
+                          />
+                          <small class="menu-field-note">
+                            Formato visual: YYYY-MM-DD HH:mm:ss. Se aplica la zona horaria seleccionada.
+                          </small>
+                        </label>
+                      } @else {
+                        <label class="menu-field">
+                          <span>Frecuencia</span>
+                          <select
+                            class="menu-select"
+                            [value]="triggerScheduleRecurringType"
+                            (change)="onScheduleRecurringTypeChange($event)"
+                          >
+                            <option value="hourly">Cada hora</option>
+                            <option value="daily">Cada dia</option>
+                            <option value="weekly">Cada semana</option>
+                            <option value="monthly">Cada mes</option>
+                          </select>
+                        </label>
+
+                        @if (triggerScheduleRecurringType === 'hourly') {
+                          <div class="schedule-animated-panel">
+                            <label class="menu-field">
+                              <span>Minuto (0-59)</span>
+                              <input
+                                type="number"
+                                min="0"
+                                max="59"
+                                class="menu-input"
+                                [value]="triggerScheduleMinute"
+                                (input)="onScheduleMinuteInput($event)"
+                              />
+                              <small class="menu-field-note">
+                                Se ejecutara cada hora en el minuto indicado.
+                              </small>
+                            </label>
+                          </div>
+                        } @else {
+                          <div class="schedule-animated-panel">
+                            <label class="menu-field">
+                              <span>Hora (HH:mm)</span>
+                              <input
+                                type="time"
+                                class="menu-input"
+                                [value]="triggerScheduleTime"
+                                (input)="onScheduleTimeInput($event)"
+                                step="60"
+                              />
+                            </label>
+                          </div>
+                        }
+
+                        @if (triggerScheduleRecurringType === 'weekly') {
+                          <div class="menu-field schedule-animated-panel">
+                            <span>Dias de la semana</span>
+                            <div style="margin-top:.24rem;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.38rem;">
+                              @for (weekday of scheduleWeekdayOptions; track weekday.value) {
+                                <label class="check-row" style="margin:0;">
+                                  <input
+                                    type="checkbox"
+                                    [checked]="isScheduleWeekdaySelected(weekday.value)"
+                                    (change)="onScheduleWeekdayToggle(weekday.value, $event)"
+                                  />
+                                  <span>{{ weekday.label }}</span>
+                                </label>
+                              }
+                            </div>
+                          </div>
+                        }
+
+                        @if (triggerScheduleRecurringType === 'monthly') {
+                          <div class="schedule-animated-panel">
+                            <label class="menu-field">
+                              <span>Dia del mes (1-31)</span>
+                              <select
+                                class="menu-select"
+                                [value]="triggerScheduleDayOfMonth"
+                                (change)="onScheduleDayOfMonthInput($event)"
+                                title="Si el dia no existe en un mes, la ejecucion se ajusta segun la logica de backend."
+                              >
+                                @for (dayOption of scheduleDayOfMonthOptions; track dayOption) {
+                                  <option [value]="dayOption">{{ dayOption }}</option>
+                                }
+                              </select>
+                              <small class="menu-field-note">
+                                Si el dia no existe en el mes, se aplica la logica de ejecucion del backend.
+                              </small>
+                              @if (shouldShowScheduleMonthlyDayWarning()) {
+                                <small class="menu-field-note warn">
+                                  Aviso: los dias 29, 30 y 31 no existen en todos los meses.
+                                </small>
+                              }
+                            </label>
+                          </div>
+                        }
+                      }
+                    </section>
+
+                    <section
+                      class="schedule-section schedule-animated-panel"
+                      style="display:grid;gap:.4rem;border:1px solid #d6e5f3;border-radius:.72rem;padding:.62rem;background:rgba(255,255,255,.86);"
+                    >
+                      <p
+                        class="schedule-section-title"
+                        style="margin:0;color:#355474;font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;"
+                      >
+                        Zona horaria
+                      </p>
+                      <label class="menu-field">
+                        <span>Selecciona zona horaria</span>
+                        <input
+                          type="text"
+                          class="menu-input"
+                          [value]="triggerScheduleTimezone"
+                          (input)="onScheduleTimezoneInput($event)"
+                          list="workflow-schedule-timezones"
+                          placeholder="America/Bogota"
+                        />
+                        <datalist id="workflow-schedule-timezones">
+                          @for (timezoneOption of scheduleTimezoneOptions; track timezoneOption.value) {
+                            <option [value]="timezoneOption.value">
+                              {{ timezoneOption.label }}
+                            </option>
+                          }
+                        </datalist>
+                        <small class="menu-field-note">
+                          Hora actual en la zona: {{ getScheduleTimezoneCurrentTimeLabel() }}
+                        </small>
+                      </label>
+                    </section>
+
+                    <section
+                      class="schedule-section schedule-advanced-section"
+                      style="display:grid;gap:.4rem;border:1px solid #d6e5f3;border-radius:.72rem;padding:.62rem;background:rgba(255,255,255,.86);"
+                    >
+                      <p
+                        class="schedule-section-title"
+                        style="margin:0;color:#355474;font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;"
+                      >
+                        Configuracion avanzada (JSON)
+                      </p>
+                      <button
+                        type="button"
+                        class="menu-link-btn"
+                        (click)="toggleRawConfigEditor()"
+                      >
+                        {{
+                          useRawConfigEditor
+                            ? 'Ocultar configuracion avanzada en JSON'
+                            : 'Mostrar configuracion avanzada en JSON'
+                        }}
+                      </button>
+
+                      @if (useRawConfigEditor) {
+                        <p class="menu-field-note warn">
+                          Los cambios manuales pueden sobrescribir la configuracion visual.
+                        </p>
+                        <label class="menu-field schedule-animated-panel">
+                          <span>Config JSON</span>
+                          <textarea
+                            class="menu-textarea"
+                            rows="7"
+                            [value]="editNodeConfig"
+                            (input)="onNodeConfigInput($event)"
+                            placeholder='{"events":["schedule"]}'
+                          ></textarea>
+                        </label>
+                      }
+                    </section>
+                  </div>
+
+                  @if (getScheduleValidationMessage()) {
+                    <p
+                      class="menu-field-error"
+                      style="margin:0;color:#a65342;font-size:.78rem;font-weight:600;"
+                    >
+                      {{ getScheduleValidationMessage() }}
+                    </p>
+                  }
+                  <p
+                    class="schedule-summary"
+                    style="margin:0;color:#4f6a85;font-size:.78rem;"
+                  >
+                    {{ getScheduleSummary() }}
+                  </p>
+                </div>
+              } @else if (isWebhookTriggerEditor()) {
+                <p class="visual-title">Trigger webhook</p>
+                <p class="menu-empty">
+                  Este nodo se activa al recibir una peticion POST en esta URL.
+                </p>
+
+                <label class="menu-field">
+                  <span>URL del webhook</span>
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="getWebhookTriggerUrl()"
+                    readonly
+                  />
+                </label>
+                <button
+                  type="button"
+                  class="menu-link-btn"
+                  (click)="regenerateWebhookTriggerToken()"
+                >
+                  Regenerar URL
+                </button>
+
+                <label class="menu-field">
+                  <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                    <span>Response esperado (JSON)</span>
+                    <button
+                      type="button"
+                      class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                      [disabled]="!hasVariableCandidatesForEditor()"
+                      (click)="openVariablePickerForField('triggerWebhookResponse')"
+                      title="Anadir variable"
+                    >
+                      +
+                    </button>
+                  </span>
+                  <div style="position:relative;">
+                    <textarea
+                      class="menu-textarea"
+                      rows="5"
+                      [value]="triggerWebhookResponse"
+                      (input)="onWebhookResponseInput($event)"
+                      (keydown)="onVariableFieldKeydown('triggerWebhookResponse', $event)"
+                      (focus)="onVariableFieldFocus('triggerWebhookResponse')"
+                      (blur)="onVariableFieldBlur('triggerWebhookResponse')"
+                      (click)="captureVariableFieldSelection('triggerWebhookResponse', $event)"
+                      (keyup)="captureVariableFieldSelection('triggerWebhookResponse', $event)"
+                      (select)="captureVariableFieldSelection('triggerWebhookResponse', $event)"
+                      [style.color]="triggerWebhookResponse.trim() && !isVariableFieldFocused('triggerWebhookResponse') ? 'transparent' : null"
+                      [style.webkitTextFillColor]="triggerWebhookResponse.trim() && !isVariableFieldFocused('triggerWebhookResponse') ? 'transparent' : null"
+                      style="caret-color:#1f364e;"
+                      placeholder='{"event":"created"}'
+                    ></textarea>
+                  @if (triggerWebhookResponse.trim() && !isVariableFieldFocused('triggerWebhookResponse')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:.62rem .68rem;display:block;pointer-events:none;overflow:hidden;white-space:pre-wrap;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                      >
+                        @for (segment of buildVariableDisplaySegments(triggerWebhookResponse); track $index) {
+                          @if (segment.isToken) {
+                            <button
+                              type="button"
+                              style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;margin-right:.2rem;margin-bottom:.18rem;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                              (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                              (click)="removeTokenByField('triggerWebhookResponse', segment.tokenIndex)"
+                              title="Quitar variable"
+                            >
+                              <span>{{ segment.label }}</span>
+                              <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                            </button>
+                          } @else {
+                            <span [textContent]="segment.text"></span>
+                          }
+                        }
+                      </div>
+                    }
+                  </div>
+                  <small class="menu-field-note">
+                    Si lo dejas vacio, se guarda todo el payload recibido.
+                  </small>
+                </label>
+              } @else {
+                <p class="visual-title">Evento que activa el workflow</p>
+                <p class="menu-empty">Entidad: {{ getTriggerEntityLabel() }}</p>
+
+                <label class="check-row">
+                  <input
+                    type="checkbox"
+                    [checked]="triggerOnCreated"
+                    (change)="onTriggerToggle('created', $event)"
+                  />
+                  <span>{{ getTriggerEventLabel('created') }}</span>
+                </label>
+
+                <label class="check-row">
+                  <input
+                    type="checkbox"
+                    [checked]="triggerOnUpdated"
+                    (change)="onTriggerToggle('updated', $event)"
+                  />
+                  <span>{{ getTriggerEventLabel('updated') }}</span>
+                </label>
+
+                <label class="check-row">
+                  <input
+                    type="checkbox"
+                    [checked]="triggerOnDeleted"
+                    (change)="onTriggerToggle('deleted', $event)"
+                  />
+                  <span>{{ getTriggerEventLabel('deleted') }}</span>
+                </label>
+              }
+            </div>
+                    } @else if (isIfEditor() && !useRawConfigEditor) {
+            <div class="visual-card">
+              <p class="visual-title">If</p>
+              <p class="menu-empty">
+                Compara reglas y enruta por salida <strong>true</strong> o <strong>false</strong>.
+              </p>
+
+              <label class="menu-field">
+                <span>Modo</span>
+                <select class="menu-select" [(ngModel)]="decisionIfLogicalOperator">
+                  @for (option of getDecisionLogicalOperatorOptions(); track option.value) {
+                    <option [ngValue]="option.value">{{ option.label }}</option>
+                  }
+                </select>
+              </label>
+
+              <div style="display:grid;gap:.5rem;">
+                @for (rule of decisionIfRules; track rule.id; let index = $index) {
+                  <article style="border:1px solid #d2e2ef;border-radius:.7rem;background:#f8fbff;padding:.55rem;display:grid;gap:.45rem;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:.45rem;">
+                      <span style="color:#35587b;font-size:.76rem;font-weight:700;">Regla {{ index + 1 }}</span>
+                      <button type="button" class="menu-btn danger menu-btn-inline-danger" (click)="removeDecisionIfRule(rule.id)">Quitar</button>
+                    </div>
+
+                    <label class="menu-field" style="margin:0;">
+                      <span style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                        <span>Left</span>
+                        <button type="button" class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;" [disabled]="!hasVariableCandidatesForEditor()" (click)="openVariablePickerForDecisionRuleOperand('if', rule.id, 'left')">+</button>
+                      </span>
+                      <div style="position:relative;">
+                        <input
+                          type="text"
+                          class="menu-input"
+                          [(ngModel)]="rule.left"
+                          placeholder="Usa + o escribe valor"
+                          (focus)="onDecisionRuleOperandFocus('if', rule.id, 'left', $event)"
+                          (blur)="onDecisionRuleOperandBlur('if', rule.id, 'left')"
+                          (click)="captureDecisionRuleOperandSelection('if', rule.id, 'left', $event)"
+                          (keyup)="captureDecisionRuleOperandSelection('if', rule.id, 'left', $event)"
+                          (select)="captureDecisionRuleOperandSelection('if', rule.id, 'left', $event)"
+                          [style.color]="rule.left.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'left') ? 'transparent' : null"
+                          [style.webkitTextFillColor]="rule.left.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'left') ? 'transparent' : null"
+                          style="caret-color:#1f364e;"
+                        />
+                        @if (rule.left.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'left')) {
+                          <div
+                            style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                          >
+                            @for (segment of buildVariableDisplaySegments(rule.left); track $index) {
+                              @if (segment.isToken) {
+                                <button
+                                  type="button"
+                                  style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                                  (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                  (click)="removeTokenByDecisionRuleOperand('if', rule.id, 'left', segment.tokenIndex)"
+                                  title="Quitar variable"
+                                >
+                                  <span>{{ segment.label }}</span>
+                                  <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                                </button>
+                              } @else {
+                                <span [textContent]="segment.text"></span>
+                              }
+                            }
+                          </div>
+                        }
+                      </div>
+                    </label>
+
+                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;">
+                      <label class="menu-field" style="margin:0;">
+                        <span>Tipo</span>
+                        <select
+                          class="menu-select"
+                          [(ngModel)]="rule.valueKind"
+                          (ngModelChange)="onDecisionRuleValueKindModelChange(rule)"
+                        >
+                          @for (typeOption of getDecisionValueKindOptions(); track typeOption.value) {
+                            <option [ngValue]="typeOption.value">{{ typeOption.label }}</option>
+                          }
+                        </select>
+                      </label>
+
+                      <label class="menu-field" style="margin:0;">
+                        <span>Operador</span>
+                        <select
+                          class="menu-select"
+                          [(ngModel)]="rule.operator"
+                          (ngModelChange)="onDecisionRuleOperatorModelChange(rule)"
+                        >
+                          @for (operator of getDecisionOperatorOptionsForRule(rule); track operator.value) {
+                            <option [ngValue]="operator.value">{{ operator.label }}</option>
+                          }
+                        </select>
+                      </label>
+                    </div>
+
+                    @if (shouldShowDecisionRuleRightInput(rule)) {
+                      <label class="menu-field" style="margin:0;">
+                        <span style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                          <span>Derecha</span>
+                          <button type="button" class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;" [disabled]="!hasVariableCandidatesForEditor()" (click)="openVariablePickerForDecisionRuleOperand('if', rule.id, 'right')">+</button>
+                        </span>
+                        <div style="position:relative;">
+                          <input
+                            type="text"
+                            class="menu-input"
+                            [(ngModel)]="rule.right"
+                            [placeholder]="getDecisionRuleValuePlaceholder(rule)"
+                            (focus)="onDecisionRuleOperandFocus('if', rule.id, 'right', $event)"
+                            (blur)="onDecisionRuleOperandBlur('if', rule.id, 'right')"
+                            (click)="captureDecisionRuleOperandSelection('if', rule.id, 'right', $event)"
+                            (keyup)="captureDecisionRuleOperandSelection('if', rule.id, 'right', $event)"
+                            (select)="captureDecisionRuleOperandSelection('if', rule.id, 'right', $event)"
+                            [style.color]="rule.right.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'right') ? 'transparent' : null"
+                            [style.webkitTextFillColor]="rule.right.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'right') ? 'transparent' : null"
+                            style="caret-color:#1f364e;"
+                          />
+                          @if (rule.right.trim() && !isDecisionRuleOperandFocused('if', rule.id, 'right')) {
+                            <div
+                              style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                            >
+                              @for (segment of buildVariableDisplaySegments(rule.right); track $index) {
+                                @if (segment.isToken) {
+                                  <button
+                                    type="button"
+                                    style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                                    (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                    (click)="removeTokenByDecisionRuleOperand('if', rule.id, 'right', segment.tokenIndex)"
+                                    title="Quitar variable"
+                                  >
+                                    <span>{{ segment.label }}</span>
+                                    <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                                  </button>
+                                } @else {
+                                  <span [textContent]="segment.text"></span>
+                                }
+                              }
+                            </div>
+                          }
+                        </div>
+                        @if (getDecisionRuleValueKind(rule) === 'number') {
+                          <small class="menu-field-note">
+                            Si escribes un literal como 33, se guardara como numero.
+                          </small>
+                        } @else if (getDecisionRuleValueKind(rule) === 'datetime') {
+                          <small class="menu-field-note">
+                            Usa formato YYYY-MM-DD o YYYY-MM-DDTHH:mm:ss.
+                          </small>
+                        }
+                      </label>
+                    } @else {
+                      <div style="padding:.5rem .62rem;border-radius:.56rem;border:1px dashed #c8dced;background:#f9fcff;color:#5d7b97;font-size:.78rem;">
+                        Este tipo usa operadores booleanos y no necesita valor derecho.
+                      </div>
+                    }
+                  </article>
+                }
+              </div>
+
+              <button type="button" class="menu-btn ghost menu-btn-inline-ghost" (click)="addDecisionIfRule()">+ Agregar regla</button>
+
+              @if (getDecisionIfValidationMessage()) {
+                <div style="margin-top:.62rem;padding:.5rem .62rem;border-radius:.56rem;border:1px solid #f6d1d1;background:#fff6f6;color:#8f2f2f;font-size:.78rem;">
+                  {{ getDecisionIfValidationMessage() }}
+                </div>
+              }
+
+              <div style="margin-top:.62rem;padding:.58rem .68rem;border-radius:.62rem;border:1px solid #d6e5f3;background:#f4f9ff;">
+                <p style="margin:0 0 .32rem;color:#325679;font-size:.76rem;font-weight:700;">Vista previa</p>
+                <p style="margin:0;color:#284766;font-size:.8rem;line-height:1.35;">
+                  true si: {{ getDecisionIfPreviewText() }}
+                </p>
+              </div>
+            </div>
+          } @else if (isSwitchEditor() && !useRawConfigEditor) {
+            <div class="visual-card">
+              <p class="visual-title">Switch</p>
+              <p class="menu-empty">Evalua cases en orden y usa <strong>default</strong> cuando no hay match.</p>
+
+              <div style="display:grid;gap:.5rem;">
+                @for (rule of decisionSwitchCases; track rule.id; let index = $index) {
+                  <article style="border:1px solid #d2e2ef;border-radius:.7rem;background:#f8fbff;padding:.55rem;display:grid;gap:.45rem;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:.45rem;">
+                      <span style="color:#35587b;font-size:.76rem;font-weight:700;">Case {{ getDecisionSwitchCaseLabel(index) }}</span>
+                      <button type="button" class="menu-btn danger menu-btn-inline-danger" (click)="removeDecisionSwitchCase(rule.id)">Quitar</button>
+                    </div>
+
+                    <label class="menu-field" style="margin:0;">
+                      <span style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                        <span>Left</span>
+                        <button type="button" class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;" [disabled]="!hasVariableCandidatesForEditor()" (click)="openVariablePickerForDecisionRuleOperand('switch', rule.id, 'left')">+</button>
+                      </span>
+                      <div style="position:relative;">
+                        <input
+                          type="text"
+                          class="menu-input"
+                          [(ngModel)]="rule.left"
+                          placeholder="Usa + o escribe valor"
+                          (focus)="onDecisionRuleOperandFocus('switch', rule.id, 'left', $event)"
+                          (blur)="onDecisionRuleOperandBlur('switch', rule.id, 'left')"
+                          (click)="captureDecisionRuleOperandSelection('switch', rule.id, 'left', $event)"
+                          (keyup)="captureDecisionRuleOperandSelection('switch', rule.id, 'left', $event)"
+                          (select)="captureDecisionRuleOperandSelection('switch', rule.id, 'left', $event)"
+                          [style.color]="rule.left.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'left') ? 'transparent' : null"
+                          [style.webkitTextFillColor]="rule.left.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'left') ? 'transparent' : null"
+                          style="caret-color:#1f364e;"
+                        />
+                        @if (rule.left.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'left')) {
+                          <div
+                            style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                          >
+                            @for (segment of buildVariableDisplaySegments(rule.left); track $index) {
+                              @if (segment.isToken) {
+                                <button
+                                  type="button"
+                                  style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                                  (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                  (click)="removeTokenByDecisionRuleOperand('switch', rule.id, 'left', segment.tokenIndex)"
+                                  title="Quitar variable"
+                                >
+                                  <span>{{ segment.label }}</span>
+                                  <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                                </button>
+                              } @else {
+                                <span [textContent]="segment.text"></span>
+                              }
+                            }
+                          </div>
+                        }
+                      </div>
+                    </label>
+
+                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;">
+                      <label class="menu-field" style="margin:0;">
+                        <span>Tipo</span>
+                        <select
+                          class="menu-select"
+                          [(ngModel)]="rule.valueKind"
+                          (ngModelChange)="onDecisionRuleValueKindModelChange(rule)"
+                        >
+                          @for (typeOption of getDecisionValueKindOptions(); track typeOption.value) {
+                            <option [ngValue]="typeOption.value">{{ typeOption.label }}</option>
+                          }
+                        </select>
+                      </label>
+
+                      <label class="menu-field" style="margin:0;">
+                        <span>Operador</span>
+                        <select
+                          class="menu-select"
+                          [(ngModel)]="rule.operator"
+                          (ngModelChange)="onDecisionRuleOperatorModelChange(rule)"
+                        >
+                          @for (operator of getDecisionOperatorOptionsForRule(rule); track operator.value) {
+                            <option [ngValue]="operator.value">{{ operator.label }}</option>
+                          }
+                        </select>
+                      </label>
+                    </div>
+
+                    @if (shouldShowDecisionRuleRightInput(rule)) {
+                      <label class="menu-field" style="margin:0;">
+                        <span style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                          <span>Derecha</span>
+                          <button type="button" class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;" [disabled]="!hasVariableCandidatesForEditor()" (click)="openVariablePickerForDecisionRuleOperand('switch', rule.id, 'right')">+</button>
+                        </span>
+                        <div style="position:relative;">
+                          <input
+                            type="text"
+                            class="menu-input"
+                            [(ngModel)]="rule.right"
+                            [placeholder]="getDecisionRuleValuePlaceholder(rule)"
+                            (focus)="onDecisionRuleOperandFocus('switch', rule.id, 'right', $event)"
+                            (blur)="onDecisionRuleOperandBlur('switch', rule.id, 'right')"
+                            (click)="captureDecisionRuleOperandSelection('switch', rule.id, 'right', $event)"
+                            (keyup)="captureDecisionRuleOperandSelection('switch', rule.id, 'right', $event)"
+                            (select)="captureDecisionRuleOperandSelection('switch', rule.id, 'right', $event)"
+                            [style.color]="rule.right.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'right') ? 'transparent' : null"
+                            [style.webkitTextFillColor]="rule.right.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'right') ? 'transparent' : null"
+                            style="caret-color:#1f364e;"
+                          />
+                          @if (rule.right.trim() && !isDecisionRuleOperandFocused('switch', rule.id, 'right')) {
+                            <div
+                              style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                            >
+                              @for (segment of buildVariableDisplaySegments(rule.right); track $index) {
+                                @if (segment.isToken) {
+                                  <button
+                                    type="button"
+                                    style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                                    (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                    (click)="removeTokenByDecisionRuleOperand('switch', rule.id, 'right', segment.tokenIndex)"
+                                    title="Quitar variable"
+                                  >
+                                    <span>{{ segment.label }}</span>
+                                    <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                                  </button>
+                                } @else {
+                                  <span [textContent]="segment.text"></span>
+                                }
+                              }
+                            </div>
+                          }
+                        </div>
+                        @if (getDecisionRuleValueKind(rule) === 'number') {
+                          <small class="menu-field-note">
+                            Si escribes un literal como 33, se guardara como numero.
+                          </small>
+                        } @else if (getDecisionRuleValueKind(rule) === 'datetime') {
+                          <small class="menu-field-note">
+                            Usa formato YYYY-MM-DD o YYYY-MM-DDTHH:mm:ss.
+                          </small>
+                        }
+                      </label>
+                    } @else {
+                      <div style="padding:.5rem .62rem;border-radius:.56rem;border:1px dashed #c8dced;background:#f9fcff;color:#5d7b97;font-size:.78rem;">
+                        Este tipo usa operadores booleanos y no necesita valor derecho.
+                      </div>
+                    }
+                  </article>
+                }
+              </div>
+
+              <button type="button" class="menu-btn ghost menu-btn-inline-ghost" (click)="addDecisionSwitchCase()">+ Agregar case</button>
+
+              <div style="margin-top:.6rem;padding:.5rem .62rem;border:1px dashed #c4d8ea;border-radius:.6rem;background:#fff;color:#577da0;font-size:.78rem;">
+                Salida fija adicional: <strong>default</strong>.
+              </div>
+
+              @if (getDecisionSwitchValidationMessage()) {
+                <div style="margin-top:.62rem;padding:.5rem .62rem;border-radius:.56rem;border:1px solid #f6d1d1;background:#fff6f6;color:#8f2f2f;font-size:.78rem;">
+                  {{ getDecisionSwitchValidationMessage() }}
+                </div>
+              }
+            </div>
+          } @else if (isJavascriptEditor() && !useRawConfigEditor) {
+            <div class="visual-card wf-js-editor-card">
+              <p class="visual-title">JavaScript</p>
+              <p class="menu-empty">
+                Define valores de entrada y procesa con JS. El resultado del <strong>return</strong> se guarda para variables globales.
+              </p>
+
+              <section class="wf-js-section">
+                <div class="wf-js-section-header">
+                  <p class="wf-js-section-title">Inputs</p>
+                  <button
+                    type="button"
+                    class="menu-btn ghost wf-js-add-input-btn"
+                    (click)="addJavascriptInputRow()"
+                  >
+                    + Agregar valor
+                  </button>
+                </div>
+
+                <div class="wf-js-input-list">
+                  @for (row of actionJavascriptInputs; track row.id; let index = $index) {
+                    <article class="wf-js-input-row">
+                      <div class="wf-js-input-grid">
+                        <label class="menu-field wf-js-field wf-js-name-field">
+                          <span class="wf-js-field-label">
+                            <span
+                              class="wf-js-color-dot"
+                              [style.backgroundColor]="getJavascriptInputColor(row.name)"
+                            ></span>
+                            <span>Input {{ index + 1 }}</span>
+                          </span>
+                          <input
+                            type="text"
+                            class="menu-input wf-js-compact-input"
+                            [value]="row.name"
+                            (input)="onJavascriptInputNameInput(row.id, $event)"
+                            (blur)="onJavascriptInputNameBlur(row.id)"
+                            (keydown)="onJavascriptInputNameKeydown(row.id, $event)"
+                            placeholder="valor1"
+                          />
+                        </label>
+
+                        <label class="menu-field wf-js-field wf-js-value-field">
+                          <span
+                            class="wf-js-field-label"
+                            style="justify-content:space-between;"
+                          >
+                            <span>Valor</span>
+                            <button
+                              type="button"
+                              class="inline-var-trigger"
+                              [disabled]="!hasVariableCandidatesForEditor()"
+                              (click)="openVariablePickerForJavascriptInput(row.id)"
+                              style="width:1.12rem;height:1.12rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.76rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                            >
+                              +
+                            </button>
+                          </span>
+                          <div style="position:relative;">
+                            <input
+                              type="text"
+                              class="menu-input wf-js-compact-input"
+                              [value]="row.value"
+                              (input)="onJavascriptInputValueInput(row.id, $event)"
+                              placeholder="Usa + o escribe valor"
+                              (focus)="onJavascriptInputValueFocus(row.id, $event)"
+                              (blur)="onJavascriptInputValueBlur(row.id)"
+                              (click)="captureJavascriptInputValueSelection(row.id, $event)"
+                              (keyup)="captureJavascriptInputValueSelection(row.id, $event)"
+                              (select)="captureJavascriptInputValueSelection(row.id, $event)"
+                              [style.color]="row.value.trim() && !isJavascriptInputValueFocused(row.id) ? 'transparent' : null"
+                              [style.webkitTextFillColor]="row.value.trim() && !isJavascriptInputValueFocused(row.id) ? 'transparent' : null"
+                              style="caret-color:#1f364e;"
+                            />
+                            @if (row.value.trim() && !isJavascriptInputValueFocused(row.id)) {
+                              <div
+                                style="position:absolute;inset:1px;padding:0 .52rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.84rem;line-height:1.35;"
+                              >
+                                @for (segment of buildVariableDisplaySegments(row.value); track $index) {
+                                  @if (segment.isToken) {
+                                    <button
+                                      type="button"
+                                      style="display:inline-flex;align-items:center;gap:.3rem;padding:.16rem .42rem .16rem .48rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.74rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                                      (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                      (click)="removeTokenByJavascriptInput(row.id, segment.tokenIndex)"
+                                      title="Quitar variable"
+                                    >
+                                      <span>{{ segment.label }}</span>
+                                      <span style="font-size:.72rem;line-height:1;opacity:.9;">x</span>
+                                    </button>
+                                  } @else {
+                                    <span [textContent]="segment.text"></span>
+                                  }
+                                }
+                              </div>
+                            }
+                          </div>
+                        </label>
+
+                        <button
+                          type="button"
+                          class="wf-js-remove-btn"
+                          (click)="removeJavascriptInputRow(row.id)"
+                          title="Quitar valor"
+                        >
+                          x
+                        </button>
+                      </div>
+                    </article>
+                  }
+                </div>
+              </section>
+
+              <section class="wf-js-section">
+                <p class="wf-js-section-title">Resultado</p>
+                <label class="menu-field" style="margin:0;">
+                  <span>Clave de resultado</span>
+                  <input
+                    type="text"
+                    class="menu-input wf-js-compact-input"
+                    [value]="actionJavascriptResultKey"
+                    (input)="onNormalizedInput('actionJavascriptResultKey', $event)"
+                    placeholder="result"
+                  />
+                  <small class="menu-field-note">El retorno se guarda unicamente dentro de esta clave.</small>
+                </label>
+                <label class="menu-field" style="margin:0;">
+                  <span>Salida esperada (JSON)</span>
+                  <textarea
+                    class="menu-textarea"
+                    rows="6"
+                    [value]="actionJavascriptResponse"
+                    (input)="onNormalizedInput('actionJavascriptResponse', $event)"
+                    placeholder="{&#10;  &quot;count&quot;: 1,&#10;  &quot;values&quot;: {&#10;    &quot;valor1&quot;: &quot;&quot;&#10;  }&#10;}"
+                  ></textarea>
+                  <small class="menu-field-note">
+                    Se usa para sugerir variables anidadas en el selector global.
+                  </small>
+                </label>
+              </section>
+
+              <section class="wf-js-section">
+                <p class="wf-js-section-title">Codigo</p>
+                <div class="menu-field" style="margin:0;">
+                  <span>Editor JavaScript</span>
+                  <div
+                    class="wf-js-monaco-shell"
+                    (mousedown)="onJavascriptMonacoShellMouseDown($event)"
+                    (click)="focusJavascriptMonacoEditor()"
+                    (keydown)="onJavascriptMonacoContainerKeydown($event)"
+                    (keyup)="onJavascriptMonacoContainerKeyup($event)"
+                  >
+                    <div
+                      #javascriptMonacoContainer
+                      class="wf-js-monaco"
+                    ></div>
+                  </div>
+                  <small class="menu-field-note">Debe incluir al menos un <strong>return</strong>.</small>
+                </div>
+              </section>
+
+              @if (getJavascriptValidationMessage()) {
+                <div style="margin-top:.62rem;padding:.5rem .62rem;border-radius:.56rem;border:1px solid #f6d1d1;background:#fff6f6;color:#8f2f2f;font-size:.78rem;">
+                  {{ getJavascriptValidationMessage() }}
+                </div>
+              }
+            </div>
+          } @else if (isCreateProjectEditor() && !useRawConfigEditor) {
+            <div class="visual-card">
+              <p class="visual-title">Proyecto a crear</p>
+
+              <label class="menu-field">
+                <span>Asignar a usuario existente (opcional)</span>
+                @if (assignableUsers.length) {
+                  <select
+                    class="menu-select"
+                    [ngModel]="actionAssignedUserId"
+                    (ngModelChange)="onActionAssignedUserModelChange($event)"
+                  >
+                    <option [ngValue]="''">
+                      Sin asignar (se crea automaticamente en el evento)
+                    </option>
+                    @if (hasMissingAssignedUserSelection()) {
+                      <option [ngValue]="actionAssignedUserId">
+                        Usuario asignado (ID: {{ actionAssignedUserId }})
+                      </option>
+                    }
+                    @for (user of assignableUsers; track user.id) {
+                      <option [ngValue]="getAssignableUserIdValue(user)">
+                        {{ getAssignableUserOptionLabel(user) }}
+                      </option>
+                    }
+                  </select>
+                } @else {
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="actionAssignedUserId"
+                    (input)="onActionAssignedUserInput($event)"
+                    placeholder="ID del usuario destino"
+                  />
+                }
+              </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Nombre</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('projectName')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="actionProjectName"
+                    (input)="onNormalizedInput('actionProjectName', $event)"
+                    (keydown)="onVariableFieldKeydown('projectName', $event)"
+                    (focus)="onVariableFieldFocus('projectName')"
+                    (blur)="onVariableFieldBlur('projectName')"
+                    (click)="captureVariableFieldSelection('projectName', $event)"
+                    (keyup)="captureVariableFieldSelection('projectName', $event)"
+                    (select)="captureVariableFieldSelection('projectName', $event)"
+                    [style.color]="actionProjectName.trim() && !isVariableFieldFocused('projectName') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionProjectName.trim() && !isVariableFieldFocused('projectName') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="Nombre del proyecto"
+                  />
+                  @if (actionProjectName.trim() && !isVariableFieldFocused('projectName')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionProjectName); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeProjectTokenByIndex('projectName', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+              </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Descripcion</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('projectDescription')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <textarea
+                    class="menu-textarea"
+                    rows="4"
+                    [value]="actionProjectDescription"
+                    (input)="onNormalizedInput('actionProjectDescription', $event)"
+                    (keydown)="onVariableFieldKeydown('projectDescription', $event)"
+                    (focus)="onVariableFieldFocus('projectDescription')"
+                    (blur)="onVariableFieldBlur('projectDescription')"
+                    (click)="captureVariableFieldSelection('projectDescription', $event)"
+                    (keyup)="captureVariableFieldSelection('projectDescription', $event)"
+                    (select)="captureVariableFieldSelection('projectDescription', $event)"
+                    [style.color]="actionProjectDescription.trim() && !isVariableFieldFocused('projectDescription') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionProjectDescription.trim() && !isVariableFieldFocused('projectDescription') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="Descripcion opcional"
+                  ></textarea>
+                  @if (actionProjectDescription.trim() && !isVariableFieldFocused('projectDescription')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:.62rem .68rem;display:block;pointer-events:none;overflow:hidden;white-space:pre-wrap;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionProjectDescription); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;margin-right:.2rem;margin-bottom:.18rem;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeProjectTokenByIndex('projectDescription', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                  </div>
+                </label>
+              </div>
+          } @else if (isCreateTaskEditor() && !useRawConfigEditor) {
+            <div class="visual-card">
+              <p class="visual-title">Tarea a crear</p>
+
+              <label class="menu-field">
+                <span>Asignar a usuario existente (opcional)</span>
+                @if (assignableUsers.length) {
+                  <select
+                    class="menu-select"
+                    [ngModel]="actionAssignedUserId"
+                    (ngModelChange)="onActionAssignedUserModelChange($event)"
+                  >
+                    <option [ngValue]="''">
+                      Sin asignar (se crea automaticamente en el evento)
+                    </option>
+                    @if (hasMissingAssignedUserSelection()) {
+                      <option [ngValue]="actionAssignedUserId">
+                        Usuario asignado (ID: {{ actionAssignedUserId }})
+                      </option>
+                    }
+                    @for (user of assignableUsers; track user.id) {
+                      <option [ngValue]="getAssignableUserIdValue(user)">
+                        {{ getAssignableUserOptionLabel(user) }}
+                      </option>
+                    }
+                  </select>
+                } @else {
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="actionAssignedUserId"
+                    (input)="onActionAssignedUserInput($event)"
+                    placeholder="ID del usuario destino"
+                  />
+                }
+              </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Nombre</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('taskName')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="actionTaskName"
+                    (input)="onNormalizedInput('actionTaskName', $event)"
+                    (keydown)="onVariableFieldKeydown('taskName', $event)"
+                    (focus)="onVariableFieldFocus('taskName')"
+                    (blur)="onVariableFieldBlur('taskName')"
+                    (click)="captureVariableFieldSelection('taskName', $event)"
+                    (keyup)="captureVariableFieldSelection('taskName', $event)"
+                    (select)="captureVariableFieldSelection('taskName', $event)"
+                    [style.color]="actionTaskName.trim() && !isVariableFieldFocused('taskName') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionTaskName.trim() && !isVariableFieldFocused('taskName') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="Nombre de la tarea inicial"
+                  />
+                  @if (actionTaskName.trim() && !isVariableFieldFocused('taskName')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionTaskName); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('taskName', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+              </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Descripcion</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('taskDescription')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <textarea
+                    class="menu-textarea"
+                    rows="4"
+                    [value]="actionTaskDescription"
+                    (input)="onNormalizedInput('actionTaskDescription', $event)"
+                    (keydown)="onVariableFieldKeydown('taskDescription', $event)"
+                    (focus)="onVariableFieldFocus('taskDescription')"
+                    (blur)="onVariableFieldBlur('taskDescription')"
+                    (click)="captureVariableFieldSelection('taskDescription', $event)"
+                    (keyup)="captureVariableFieldSelection('taskDescription', $event)"
+                    (select)="captureVariableFieldSelection('taskDescription', $event)"
+                    [style.color]="actionTaskDescription.trim() && !isVariableFieldFocused('taskDescription') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionTaskDescription.trim() && !isVariableFieldFocused('taskDescription') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="Descripcion opcional"
+                  ></textarea>
+                  @if (actionTaskDescription.trim() && !isVariableFieldFocused('taskDescription')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:.62rem .68rem;display:block;pointer-events:none;overflow:hidden;white-space:pre-wrap;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionTaskDescription); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;margin-right:.2rem;margin-bottom:.18rem;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('taskDescription', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+              </label>
+
+              <label class="menu-field">
+                <span>Estado</span>
+                <select
+                  class="menu-select"
+                  [value]="actionTaskEstado"
+                  (change)="onTaskEstadoChange($event)"
+                >
+                  <option value="pendiente">Pendiente</option>
+                  <option value="en progreso">En progreso</option>
+                  <option value="completada">Completada</option>
+                </select>
+              </label>
+            </div>
+          } @else if (isCreateUserEditor() && !useRawConfigEditor) {
+            <div class="visual-card">
+              <p class="visual-title">Usuario a crear</p>
+
+              <label class="menu-field">
+                <span>Asignar a usuario existente (opcional)</span>
+                @if (assignableUsers.length) {
+                  <select
+                    class="menu-select"
+                    [ngModel]="actionAssignedUserId"
+                    (ngModelChange)="onActionAssignedUserModelChange($event)"
+                  >
+                    <option [ngValue]="''">
+                      Sin asignar (se crea automaticamente en el evento)
+                    </option>
+                    @if (hasMissingAssignedUserSelection()) {
+                      <option [ngValue]="actionAssignedUserId">
+                        Usuario asignado (ID: {{ actionAssignedUserId }})
+                      </option>
+                    }
+                    @for (user of assignableUsers; track user.id) {
+                      <option [ngValue]="getAssignableUserIdValue(user)">
+                        {{ getAssignableUserOptionLabel(user) }}
+                      </option>
+                    }
+                  </select>
+                } @else {
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="actionAssignedUserId"
+                    (input)="onActionAssignedUserInput($event)"
+                    placeholder="ID del usuario destino"
+                  />
+                }
+              </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Nombre</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('userFirstName')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="actionUserFirstName"
+                    (input)="onNormalizedInput('actionUserFirstName', $event)"
+                    (keydown)="onVariableFieldKeydown('userFirstName', $event)"
+                    (focus)="onVariableFieldFocus('userFirstName')"
+                    (blur)="onVariableFieldBlur('userFirstName')"
+                    (click)="captureVariableFieldSelection('userFirstName', $event)"
+                    (keyup)="captureVariableFieldSelection('userFirstName', $event)"
+                    (select)="captureVariableFieldSelection('userFirstName', $event)"
+                    [style.color]="actionUserFirstName.trim() && !isVariableFieldFocused('userFirstName') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionUserFirstName.trim() && !isVariableFieldFocused('userFirstName') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="Nombre"
+                  />
+                  @if (actionUserFirstName.trim() && !isVariableFieldFocused('userFirstName')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionUserFirstName); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('userFirstName', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+              </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Apellido</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('userLastName')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="actionUserLastName"
+                    (input)="onNormalizedInput('actionUserLastName', $event)"
+                    (keydown)="onVariableFieldKeydown('userLastName', $event)"
+                    (focus)="onVariableFieldFocus('userLastName')"
+                    (blur)="onVariableFieldBlur('userLastName')"
+                    (click)="captureVariableFieldSelection('userLastName', $event)"
+                    (keyup)="captureVariableFieldSelection('userLastName', $event)"
+                    (select)="captureVariableFieldSelection('userLastName', $event)"
+                    [style.color]="actionUserLastName.trim() && !isVariableFieldFocused('userLastName') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionUserLastName.trim() && !isVariableFieldFocused('userLastName') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="Apellido"
+                  />
+                  @if (actionUserLastName.trim() && !isVariableFieldFocused('userLastName')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionUserLastName); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('userLastName', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+              </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Email</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('userEmail')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <input
+                    type="email"
+                    class="menu-input"
+                    [value]="actionUserEmail"
+                    (input)="onNormalizedInput('actionUserEmail', $event)"
+                    (keydown)="onVariableFieldKeydown('userEmail', $event)"
+                    (focus)="onVariableFieldFocus('userEmail')"
+                    (blur)="onVariableFieldBlur('userEmail')"
+                    (click)="captureVariableFieldSelection('userEmail', $event)"
+                    (keyup)="captureVariableFieldSelection('userEmail', $event)"
+                    (select)="captureVariableFieldSelection('userEmail', $event)"
+                    [style.color]="actionUserEmail.trim() && !isVariableFieldFocused('userEmail') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionUserEmail.trim() && !isVariableFieldFocused('userEmail') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="usuario@workflow.local"
+                  />
+                  @if (actionUserEmail.trim() && !isVariableFieldFocused('userEmail')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionUserEmail); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('userEmail', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+              </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Contrasena (opcional)</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('userPassword')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="actionUserPassword"
+                    (input)="onNormalizedInput('actionUserPassword', $event)"
+                    (keydown)="onVariableFieldKeydown('userPassword', $event)"
+                    (focus)="onVariableFieldFocus('userPassword')"
+                    (blur)="onVariableFieldBlur('userPassword')"
+                    (click)="captureVariableFieldSelection('userPassword', $event)"
+                    (keyup)="captureVariableFieldSelection('userPassword', $event)"
+                    (select)="captureVariableFieldSelection('userPassword', $event)"
+                    [style.color]="actionUserPassword.trim() && !isVariableFieldFocused('userPassword') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionUserPassword.trim() && !isVariableFieldFocused('userPassword') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="Contrasena temporal o variable"
+                  />
+                  @if (actionUserPassword.trim() && !isVariableFieldFocused('userPassword')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionUserPassword); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('userPassword', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+              </label>
+
+              <label class="menu-field">
+                <span>Role ID</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  class="menu-input"
+                  [value]="actionUserRoleId"
+                  (input)="onNormalizedInput('actionUserRoleId', $event)"
+                  placeholder="2"
+                />
+                <small class="menu-field-note">Por defecto: 2 (usuario).</small>
+              </label>
+
+              <label class="menu-field">
+                <span>Status ID</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  class="menu-input"
+                  [value]="actionUserStatusId"
+                  (input)="onNormalizedInput('actionUserStatusId', $event)"
+                  placeholder="1"
+                />
+                <small class="menu-field-note">Por defecto: 1 (activo).</small>
+              </label>
+            </div>
+          } @else if (isFormActionEditor() && !useRawConfigEditor) {
+            <div class="visual-card wf-form-card">
+              <p class="visual-title">Formulario</p>
+              <p class="menu-empty">
+                Configura mensaje y campos tipados. Compatible con workflows antiguos.
+              </p>
+
+              <label class="menu-field">
+                <span>Asignar formulario a usuario (opcional)</span>
+                @if (assignableUsers.length) {
+                  <select
+                    class="menu-select"
+                    [ngModel]="actionAssignedUserId"
+                    (ngModelChange)="onActionAssignedUserModelChange($event)"
+                  >
+                    <option [ngValue]="''">
+                      Sin asignar (lo completa quien ejecuta el workflow)
+                    </option>
+                    @if (hasMissingAssignedUserSelection()) {
+                      <option [ngValue]="actionAssignedUserId">
+                        Usuario asignado (ID: {{ actionAssignedUserId }})
+                      </option>
+                    }
+                    @for (user of assignableUsers; track user.id) {
+                      <option [ngValue]="getAssignableUserIdValue(user)">
+                        {{ getAssignableUserOptionLabel(user) }}
+                      </option>
+                    }
+                  </select>
+                } @else {
+                  <input
+                    type="text"
+                    class="menu-input"
+                    [value]="actionAssignedUserId"
+                    (input)="onActionAssignedUserInput($event)"
+                    placeholder="ID del usuario destino"
+                  />
+                }
+              </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head wf-form-head" style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
+                  <span>Mensaje del formulario (opcional)</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger wf-inline-var-trigger"
+                    style="width:1.25rem;height:1.25rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.82rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('formMessage')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <textarea
+                    class="menu-input"
+                    rows="2"
+                    [value]="actionFormMessageTemplate"
+                    (input)="onNormalizedInput('actionFormMessageTemplate', $event)"
+                    (keydown)="onVariableFieldKeydown('formMessage', $event)"
+                    (focus)="onVariableFieldFocus('formMessage')"
+                    (blur)="onVariableFieldBlur('formMessage')"
+                    (click)="captureVariableFieldSelection('formMessage', $event)"
+                    (keyup)="captureVariableFieldSelection('formMessage', $event)"
+                    (select)="captureVariableFieldSelection('formMessage', $event)"
+                    [style.color]="actionFormMessageTemplate.trim() && !isVariableFieldFocused('formMessage') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionFormMessageTemplate.trim() && !isVariableFieldFocused('formMessage') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="Ej: Se creara un usuario con el correo del formulario anterior. Elige SI o NO."
+                  ></textarea>
+                  @if (actionFormMessageTemplate.trim() && !isVariableFieldFocused('formMessage')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:.42rem .68rem;display:block;pointer-events:none;overflow:hidden;white-space:pre-wrap;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionFormMessageTemplate); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;margin-right:.2rem;margin-bottom:.18rem;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('formMessage', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+                <small class="menu-field-note">
+                  Este texto se muestra al usuario cuando complete el formulario.
+                </small>
+              </label>
+
+              <div class="http-headers-block wf-form-fields-block" style="gap:.58rem;">
+                <div class="http-headers-header">
+                  <span>Campos</span>
+                  <button type="button" class="menu-link-btn" (click)="addFormFieldRow()">
+                    Agregar campo
+                  </button>
+                </div>
+
+                @for (field of actionFormFields; track $index; let fieldIndex = $index) {
+                  <div class="wf-form-field-card" style="display:grid;gap:.62rem;border:1px solid #d5e3ef;border-radius:.78rem;padding:.65rem;background:#fbfdff;">
+                    <div class="wf-form-field-main" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem;align-items:end;">
+                      @if ((field.type || 'text') !== 'instruction') {
+                        <label class="menu-field wf-form-field">
+                          <span>Campo</span>
+                          <input
+                            type="text"
+                            class="menu-input"
+                            [value]="field.key || field.name"
+                            (input)="onFormFieldNameInput($index, $event)"
+                            placeholder="Ej: aceptacion"
+                          />
+                        </label>
+                      }
+
+                      <label class="menu-field wf-form-field">
+                        <span>Tipo</span>
+                        <select
+                          class="menu-select"
+                          [value]="field.type || 'text'"
+                          (change)="onFormFieldTypeChange($index, $event)"
+                        >
+                          <option value="text">text</option>
+                          <option value="number">number</option>
+                          <option value="email">email</option>
+                          <option value="password">password</option>
+                          <option value="textarea">textarea</option>
+                          <option value="select">select</option>
+                          <option value="instruction">instruccion</option>
+                        </select>
+                      </label>
+
+                      @if ((field.type || 'text') !== 'instruction') {
+                        <label class="menu-field wf-form-required" style="margin:0;display:flex;align-items:center;gap:.42rem;align-self:center;">
+                          <input
+                            type="checkbox"
+                            [checked]="field.required !== false"
+                            (change)="onFormFieldRequiredToggle($index, $event)"
+                          />
+                          <span>Required</span>
+                        </label>
+                      }
+
+                      <button
+                        type="button"
+                        class="http-header-remove-btn wf-form-remove-btn"
+                        style="padding:.4rem .6rem;min-width:4.2rem;justify-self:start;"
+                        (click)="removeFormFieldRow($index)"
+                      >
+                        Quitar
+                      </button>
+                    </div>
+
+                    <label class="menu-field wf-form-field" style="margin:0;">
+                      <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                        <span>Instruccion (opcional)</span>
+                        <button
+                          type="button"
+                          class="inline-var-trigger"
+                          style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                          [disabled]="!hasVariableCandidatesForEditor()"
+                          (click)="openVariablePickerForFormFieldInstruction($index)"
+                          title="Anadir variable"
+                        >
+                          +
+                        </button>
+                      </span>
+                      <div style="position:relative;">
+                        @if ((field.type || 'text') === 'instruction') {
+                          <textarea
+                            class="menu-input"
+                            rows="3"
+                            [value]="field.helpText || ''"
+                            (input)="onFormFieldInstructionInput($index, $event)"
+                            (keydown)="onFormFieldInstructionVariableKeydown($index, $event)"
+                            (focus)="onFormFieldInstructionVariableFocus($index)"
+                            (blur)="onFormFieldInstructionVariableBlur($index)"
+                            (click)="captureFormFieldInstructionVariableSelection($index, $event)"
+                            (keyup)="captureFormFieldInstructionVariableSelection($index, $event)"
+                            (select)="captureFormFieldInstructionVariableSelection($index, $event)"
+                            [style.color]="(field.helpText || '').trim() && !isFormFieldInstructionVariableFocused($index) ? 'transparent' : null"
+                            [style.webkitTextFillColor]="(field.helpText || '').trim() && !isFormFieldInstructionVariableFocused($index) ? 'transparent' : null"
+                            style="caret-color:#1f364e;"
+                            placeholder="Ej: Antes de continuar, valida que los datos esten correctos."
+                          ></textarea>
+                        } @else {
+                          <input
+                            type="text"
+                            class="menu-input"
+                            [value]="field.helpText || ''"
+                            (input)="onFormFieldInstructionInput($index, $event)"
+                            (keydown)="onFormFieldInstructionVariableKeydown($index, $event)"
+                            (focus)="onFormFieldInstructionVariableFocus($index)"
+                            (blur)="onFormFieldInstructionVariableBlur($index)"
+                            (click)="captureFormFieldInstructionVariableSelection($index, $event)"
+                            (keyup)="captureFormFieldInstructionVariableSelection($index, $event)"
+                            (select)="captureFormFieldInstructionVariableSelection($index, $event)"
+                            [style.color]="(field.helpText || '').trim() && !isFormFieldInstructionVariableFocused($index) ? 'transparent' : null"
+                            [style.webkitTextFillColor]="(field.helpText || '').trim() && !isFormFieldInstructionVariableFocused($index) ? 'transparent' : null"
+                            style="caret-color:#1f364e;"
+                            placeholder="Ej: Escribe SI o NO para continuar"
+                          />
+                        }
+                        @if ((field.helpText || '').trim() && !isFormFieldInstructionVariableFocused($index)) {
+                          <div
+                            [style]="(field.type || 'text') === 'instruction'
+                              ? 'position:absolute;inset:1px;padding:.52rem .68rem;display:block;pointer-events:none;overflow:hidden;white-space:pre-wrap;color:#1f364e;font-size:.92rem;line-height:1.35;'
+                              : 'position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;'"
+                          >
+                            @for (segment of buildVariableDisplaySegments(field.helpText || ''); track $index) {
+                              @if (segment.isToken) {
+                                <button
+                                  type="button"
+                                  [style]="(field.type || 'text') === 'instruction'
+                                    ? 'display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;margin-right:.2rem;margin-bottom:.18rem;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);'
+                                    : 'display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);'"
+                                  (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                                  (click)="removeFormFieldInstructionToken(fieldIndex, segment.tokenIndex)"
+                                  title="Quitar variable"
+                                >
+                                  <span>{{ segment.label }}</span>
+                                  <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                                </button>
+                              } @else {
+                                <span [textContent]="segment.text"></span>
+                              }
+                            }
+                          </div>
+                        }
+                      </div>
+                    </label>
+
+                    @if ((field.type || 'text') === 'select') {
+                      <div class="wf-form-options-card" style="display:grid;gap:.45rem;border:1px dashed #cfe0ef;border-radius:.68rem;padding:.52rem;background:#f9fcff;">
+                        <div class="wf-form-options-head" style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
+                          <span class="wf-form-options-title" style="font-size:.8rem;font-weight:700;color:#355775;">Opciones del select</span>
+                          <button type="button" class="menu-link-btn" (click)="addFormFieldOptionRow(fieldIndex)">
+                            Agregar opcion
+                          </button>
+                        </div>
+                        @for (option of field.options || []; track $index; let optionIndex = $index) {
+                          <div class="wf-form-option-row" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:.5rem;align-items:end;">
+                            <label class="menu-field wf-form-field">
+                              <span>Value</span>
+                              <input
+                                type="text"
+                                class="menu-input"
+                                [value]="option.value"
+                                (input)="onFormFieldOptionValueInput(fieldIndex, optionIndex, $event)"
+                                placeholder="si"
+                              />
+                            </label>
+                            <label class="menu-field wf-form-field">
+                              <span>Label</span>
+                              <input
+                                type="text"
+                                class="menu-input"
+                                [value]="option.label"
+                                (input)="onFormFieldOptionLabelInput(fieldIndex, optionIndex, $event)"
+                                placeholder="Si"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              class="http-header-remove-btn wf-form-option-remove-btn"
+                              style="padding:.36rem .54rem;min-width:3.6rem;"
+                              (click)="removeFormFieldOptionRow(fieldIndex, optionIndex)"
+                            >
+                              Quitar
+                            </button>
+                          </div>
+                        }
+                      </div>
+                    }
+
+                    @if ((field.type || 'text') !== 'instruction' && getFormFieldVariableTokenPreview(field.key || field.name); as fieldToken) {
+                      <div class="wf-form-token-wrap" style="display:flex;justify-content:flex-end;">
+                        <span class="wf-form-token-pill" style="display:inline-flex;align-items:center;max-width:100%;border:1px solid #bdd2e8;border-radius:999px;padding:.2rem .48rem;background:#edf5ff;color:#2d5a87;font-family:'JetBrains Mono','Consolas','Courier New',monospace;font-size:.71rem;font-weight:600;line-height:1.2;word-break:break-all;">
+                          {{ fieldToken }}
+                        </span>
+                      </div>
+                    }
+                  </div>
+                }
+              </div>
+
+              <div class="http-test-feedback info">
+                <p class="http-test-summary">Variables disponibles para nodos siguientes</p>
+                <p class="menu-field-note">
+                  Usa estas variables en los otros nodos con el boton +.
+                </p>
+                <div style="display:flex;flex-wrap:wrap;gap:.34rem;">
+                  @if (getFormVariableTokenPreviews().length) {
+                    @for (token of getFormVariableTokenPreviews(); track token) {
+                      <span style="display:inline-flex;align-items:center;max-width:100%;border:1px solid #bdd2e8;border-radius:999px;padding:.2rem .48rem;background:#edf5ff;color:#2d5a87;font-family:'JetBrains Mono','Consolas','Courier New',monospace;font-size:.73rem;font-weight:600;line-height:1.2;word-break:break-all;">{{ token }}</span>
+                    }
+                  } @else {
+                    <p class="menu-empty" style="margin:0;">Agrega campos para generar variables.</p>
+                  }
+                </div>
+              </div>
+            </div>
+          } @else if (isHttpRequestEditor() && !useRawConfigEditor) {
+            <div class="visual-card">
+              <p class="visual-title">Peticion HTTP</p>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>URL</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('httpUrl')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <input
+                    type="url"
+                    class="menu-input"
+                    [value]="actionHttpUrl"
+                    (input)="onNormalizedInput('actionHttpUrl', $event, true)"
+                    (keydown)="onVariableFieldKeydown('httpUrl', $event)"
+                    (focus)="onVariableFieldFocus('httpUrl')"
+                    (blur)="onVariableFieldBlur('httpUrl')"
+                    (click)="captureVariableFieldSelection('httpUrl', $event)"
+                    (keyup)="captureVariableFieldSelection('httpUrl', $event)"
+                    (select)="captureVariableFieldSelection('httpUrl', $event)"
+                    [style.color]="actionHttpUrl.trim() && !isVariableFieldFocused('httpUrl') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionHttpUrl.trim() && !isVariableFieldFocused('httpUrl') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder="https://api.example.com/webhook"
+                  />
+                  @if (actionHttpUrl.trim() && !isVariableFieldFocused('httpUrl')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:0 .68rem;display:flex;align-items:center;gap:.28rem;pointer-events:none;overflow:hidden;white-space:pre;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionHttpUrl); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('httpUrl', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+              </label>
+
+              <label class="menu-field">
+                <span>Metodo</span>
+                <select
+                  class="menu-select"
+                  [value]="actionHttpMethod"
+                  (change)="onHttpMethodChange($event)"
+                >
+                  <option value="POST">POST</option>
+                  <option value="PUT">PUT</option>
+                  <option value="PATCH">PATCH</option>
+                  <option value="DELETE">DELETE</option>
+                  <option value="GET">GET</option>
+                </select>
+              </label>
+
+              <div class="http-headers-block">
+                <div class="http-headers-header">
+                  <span>Headers</span>
+                  <button
+                    type="button"
+                    class="menu-link-btn"
+                    (click)="addHttpHeaderRow()"
+                  >
+                    Agregar header
+                  </button>
+                </div>
+
+                @for (header of actionHttpHeaders; track $index) {
+                  <div class="http-header-row">
+                    <input
+                      type="text"
+                      class="menu-input"
+                      [value]="header.name"
+                      (input)="onHttpHeaderNameInput($index, $event)"
+                      placeholder="Header"
+                    />
+                    <input
+                      type="text"
+                      class="menu-input"
+                      [value]="header.value"
+                      (input)="onHttpHeaderValueInput($index, $event)"
+                      placeholder="Valor"
+                    />
+                    <button
+                      type="button"
+                      class="http-header-remove-btn"
+                      (click)="removeHttpHeaderRow($index)"
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                }
+              </div>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Body (JSON)</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('httpBody')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <textarea
+                    class="menu-textarea"
+                    rows="6"
+                    [value]="actionHttpBody"
+                    (input)="onNormalizedInput('actionHttpBody', $event, true)"
+                    (keydown)="onVariableFieldKeydown('httpBody', $event)"
+                    (focus)="onVariableFieldFocus('httpBody')"
+                    (blur)="onVariableFieldBlur('httpBody')"
+                    (click)="captureVariableFieldSelection('httpBody', $event)"
+                    (keyup)="captureVariableFieldSelection('httpBody', $event)"
+                    (select)="captureVariableFieldSelection('httpBody', $event)"
+                    [style.color]="actionHttpBody.trim() && !isVariableFieldFocused('httpBody') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionHttpBody.trim() && !isVariableFieldFocused('httpBody') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder='{"key":"value"}'
+                  ></textarea>
+                  @if (actionHttpBody.trim() && !isVariableFieldFocused('httpBody')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:.62rem .68rem;display:block;pointer-events:none;overflow:hidden;white-space:pre-wrap;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionHttpBody); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;margin-right:.2rem;margin-bottom:.18rem;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('httpBody', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+              </label>
+
+              <label class="menu-field">
+                <span class="menu-field-head" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;">
+                  <span>Response esperado (JSON)</span>
+                  <button
+                    type="button"
+                    class="inline-var-trigger" style="width:1.15rem;height:1.15rem;min-height:auto;padding:0;border:1px solid #c7d8ea;border-radius:999px;background:#eef5ff;color:#3f6287;font-size:.78rem;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;"
+                    [disabled]="!hasVariableCandidatesForEditor()"
+                    (click)="openVariablePickerForField('httpResponse')"
+                    title="Anadir variable"
+                  >
+                    +
+                  </button>
+                </span>
+                <div style="position:relative;">
+                  <textarea
+                    class="menu-textarea"
+                    rows="6"
+                    [value]="actionHttpResponse"
+                    (input)="onNormalizedInput('actionHttpResponse', $event, true)"
+                    (keydown)="onVariableFieldKeydown('httpResponse', $event)"
+                    (focus)="onVariableFieldFocus('httpResponse')"
+                    (blur)="onVariableFieldBlur('httpResponse')"
+                    (click)="captureVariableFieldSelection('httpResponse', $event)"
+                    (keyup)="captureVariableFieldSelection('httpResponse', $event)"
+                    (select)="captureVariableFieldSelection('httpResponse', $event)"
+                    [style.color]="actionHttpResponse.trim() && !isVariableFieldFocused('httpResponse') ? 'transparent' : null"
+                    [style.webkitTextFillColor]="actionHttpResponse.trim() && !isVariableFieldFocused('httpResponse') ? 'transparent' : null"
+                    style="caret-color:#1f364e;"
+                    placeholder='{"ok":true}'
+                  ></textarea>
+                  @if (actionHttpResponse.trim() && !isVariableFieldFocused('httpResponse')) {
+                    <div
+                      style="position:absolute;inset:1px;padding:.62rem .68rem;display:block;pointer-events:none;overflow:hidden;white-space:pre-wrap;color:#1f364e;font-size:.92rem;line-height:1.35;"
+                    >
+                      @for (segment of buildVariableDisplaySegments(actionHttpResponse); track $index) {
+                        @if (segment.isToken) {
+                          <button
+                            type="button"
+                            style="display:inline-flex;align-items:center;gap:.34rem;padding:.18rem .44rem .18rem .5rem;border-radius:999px;border:0;background:linear-gradient(180deg,#b04fbd 0%,#9841a4 100%);color:#fff;font-size:.78rem;font-weight:700;line-height:1;margin-right:.2rem;margin-bottom:.18rem;pointer-events:auto;cursor:pointer;box-shadow:0 5px 12px rgba(130,41,136,.27);"
+                            (mousedown)="$event.preventDefault(); $event.stopPropagation()"
+                            (click)="removeTokenByField('httpResponse', segment.tokenIndex)"
+                            title="Quitar variable"
+                          >
+                            <span>{{ segment.label }}</span>
+                            <span style="font-size:.72rem;line-height:1;opacity:.92;">x</span>
+                          </button>
+                        } @else {
+                          <span [textContent]="segment.text"></span>
+                        }
+                      }
+                    </div>
+                  }
+                </div>
+                <small class="menu-field-note">
+                  Si lo dejas vacio, se guarda todo el payload recibido.
+                </small>
+              </label>
+            </div>
+          }
+
+          @if ((useRawConfigEditor && !isScheduleTriggerEditor()) || !isVisualEditorNode()) {
+            <label class="menu-field">
+              <span>Config JSON</span>
+              <textarea
+                class="menu-textarea"
+                rows="7"
+                [value]="editNodeConfig"
+                (input)="onNodeConfigInput($event)"
+                placeholder='{"key":"value"}'
+              ></textarea>
+            </label>
+          }
+
+          @if (isVisualEditorNode() && !isScheduleTriggerEditor()) {
+            <button
+              type="button"
+              class="menu-link-btn"
+              (click)="toggleRawConfigEditor()"
+            >
+              {{ useRawConfigEditor ? 'Volver a modo visual' : 'Modo avanzado (JSON)' }}
+            </button>
+          }
+
+          <div class="menu-actions">
+            @if (isHttpRequestEditor()) {
+              <button
+                type="button"
+                class="menu-btn menu-btn-tonal"
+                [disabled]="isSaving || isTestingHttpRequest"
+                (click)="testHttpRequestAction()"
+              >
+                {{ isTestingHttpRequest ? 'Probando peticion...' : 'Probar peticion HTTP' }}
+              </button>
+            }
+
+            @if (isHttpRequestEditor() && httpTestSummary) {
+              <div
+                class="http-test-feedback"
+                [class.success]="httpTestSeverity === 'success'"
+                [class.error]="httpTestSeverity === 'error'"
+                [class.warn]="httpTestSeverity === 'warn'"
+                [class.info]="httpTestSeverity === 'info'"
+              >
+                <div
+                  style="display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;"
+                >
+                  <p class="http-test-summary">{{ httpTestSummary }}</p>
+                  <button
+                    type="button"
+                    class="menu-link-btn"
+                    (click)="dismissHttpTestFeedback()"
+                    aria-label="Cerrar resultado de prueba HTTP"
+                    title="Cerrar"
+                    style="min-height:auto;padding:.2rem .42rem;line-height:1;"
+                  >
+                    x
+                  </button>
+                </div>
+                @if (httpTestMeta) {
+                  <p class="http-test-meta">{{ httpTestMeta }}</p>
+                }
+                @if (httpTestDetail) {
+                  <p class="http-test-detail">{{ httpTestDetail }}</p>
+                }
+                @if (httpTestResponseJson) {
+                  <pre class="http-test-json">{{ httpTestResponseJson }}</pre>
+                }
+              </div>
+            }
+
+            <div class="menu-action-row">
+              <button
+                type="button"
+                class="menu-btn menu-btn-secondary"
+                [disabled]="isSaving || isTestingHttpRequest"
+                (click)="closeRightMenu()"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                class="menu-btn menu-btn-primary"
+                [disabled]="isNodeFormSaveDisabled()"
+                (click)="saveSelectedNodeChanges()"
+              >
+                Guardar cambios
+              </button>
+            </div>
+          </div>
+        </div>
+      } @else {
+        <p class="menu-empty">Selecciona un nodo para editar su contenido.</p>
+      }
+    } @else {
+      <div class="menu-intro">
+        <p>Selecciona un nodo para agregarlo al flujo.</p>
+      </div>
+
+      <label class="menu-field">
+        <span>Buscar nodo</span>
+        <input
+          type="text"
+          class="menu-input"
+          [value]="templateSearch"
+          (input)="onTemplateSearchInput($event)"
+          placeholder="Ej: crear tarea, condicion, usuario"
+        />
+      </label>
+
+      @for (kind of templateKinds; track kind) {
+        @if (hasVisibleTemplatesForKind(kind)) {
+          <section class="menu-section">
+            <div class="menu-section-header">
+              <p class="menu-section-title">{{ getTemplateKindLabel(kind) }}</p>
+            </div>
+
+            @for (template of getVisibleTemplatesByKind(kind); track template.id) {
+              <button
+                type="button"
+                class="menu-btn menu-template-btn"
+                draggable="true"
+                (dragstart)="onTemplateDragStart($event, template)"
+                (dragend)="onTemplateDragEnd()"
+                (click)="createNodeFromMenu(template.id)"
+              >
+                <span class="template-title">{{ template.label }}</span>
+                <span class="template-description">{{ template.description }}</span>
+              </button>
+            }
+          </section>
+        }
+      }
+    }
+    </div>
+  </p-drawer>
+
+  <div class="board-controls">
+    <div class="zoom-controls">
+      <button type="button" class="zoom-btn" (click)="zoomIn()" aria-label="Acercar">
+        <i class="pi pi-search-plus"></i>
+      </button>
+      <button type="button" class="zoom-btn" (click)="zoomOut()" aria-label="Alejar">
+        <i class="pi pi-search-minus"></i>
+      </button>
+    </div>
+  </div>
+
+  @if (statusMessage || connectionHint) {
+    <p class="status-line">
+      @if (statusMessage) {
+        <span>{{ statusMessage }}</span>
+      }
+      @if (connectionHint) {
+        <span>{{ connectionHint }}</span>
+      }
+    </p>
+  }
+</div>
+</section>
+
+<p-dialog
+  [(visible)]="workflowNameDialogVisible"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [dismissableMask]="!isLoading && !isSaving"
+  [closable]="!isLoading && !isSaving"
+  [style]="{ width: '32rem', maxWidth: '96vw' }"
+  (onHide)="closeWorkflowNameDialog()"
+>
+  <ng-template pTemplate="header">
+    <span class="workflow-name-modal-title">
+      {{ workflowNameDialogMode === 'create' ? 'Crear workflow' : 'Renombrar workflow' }}
+    </span>
+  </ng-template>
+
+  <div class="workflow-name-modal-body">
+    <label for="workflow-editor-name-input" class="workflow-name-modal-label">
+      Nombre del workflow
+    </label>
+    <input
+      pInputText
+      id="workflow-editor-name-input"
+      type="text"
+      class="w-full"
+      [(ngModel)]="workflowNameDraft"
+      [maxlength]="120"
+    />
+    <small class="workflow-name-modal-help">
+      Este nombre aparece en tu lista de workflows.
+    </small>
+  </div>
+
+  <ng-template pTemplate="footer">
+    <p-button
+      label="Cancelar"
+      severity="secondary"
+      [text]="true"
+      [disabled]="isLoading || isSaving"
+      (onClick)="closeWorkflowNameDialog()"
+    ></p-button>
+    <p-button
+      [label]="workflowNameDialogMode === 'create' ? 'Crear workflow' : 'Guardar nombre'"
+      [loading]="isLoading || isSaving"
+      (onClick)="submitWorkflowNameDialog()"
+    ></p-button>
+  </ng-template>
+</p-dialog>
+
+<p-dialog
+  [(visible)]="variablePickerDialogVisible"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [dismissableMask]="true"
+  [closable]="true"
+  [style]="{ width: '34rem', maxWidth: '96vw' }"
+  (onHide)="closeVariablePickerDialog()"
+>
+  <ng-template pTemplate="header">
+    <span class="workflow-name-modal-title">Variables del workflow</span>
+  </ng-template>
+
+  <div class="workflow-name-modal-body">
+    <p class="menu-empty" style="margin:0;">
+      {{ variablePickerSourceNodeLabel || 'Sin variables disponibles' }}
+    </p>
+
+    @if (variablePickerVariables.length) {
+      <div style="display:grid;gap:.7rem;max-height:60vh;overflow:auto;padding-right:.12rem;">
+        <label style="display:grid;gap:.28rem;">
+          <span style="color:#5e7791;font-size:.76rem;font-weight:700;">Buscar variable</span>
+          <input
+            type="text"
+            class="menu-input"
+            [value]="variablePickerSearch"
+            (input)="onVariablePickerSearchInput($event)"
+            placeholder="Ej: correo, token, password"
+          />
+        </label>
+
+        <section style="border:1px solid #cfdeec;border-radius:.9rem;background:linear-gradient(180deg,#fbfdff 0%,#f4f9ff 100%);padding:.72rem;display:grid;gap:.56rem;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
+            <h4 style="margin:0;color:#254667;font-size:.88rem;font-weight:800;">Globales (Automatico)</h4>
+            <span style="border:1px solid #c3d7eb;border-radius:999px;padding:.14rem .46rem;background:#eef5ff;color:#46698e;font-size:.72rem;font-weight:700;">{{ getFilteredVariablePickerGlobalEntries().length }}</span>
+          </div>
+          <p style="margin:0;color:#5e7791;font-size:.78rem;">Disponible en todo el workflow.</p>
+
+          <div style="display:grid;gap:.34rem;">
+            @for (entry of getFilteredVariablePickerGlobalEntries(); track entry.id) {
+              <div
+                style="border:1px solid #d0dfef;border-radius:.66rem;background:#ffffff;padding:.42rem .52rem;display:grid;gap:.34rem;"
+                [style.border-color]="entry.isAmbiguous ? '#e6c9a3' : '#d0dfef'"
+                [style.background]="entry.isAmbiguous ? '#fffaf3' : '#ffffff'"
+              >
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:.35rem;">
+                  <button
+                    type="button"
+                    style="flex:1 1 auto;border:0;background:transparent;color:#2f567a;font-size:.84rem;font-weight:700;text-align:left;padding:0;cursor:pointer;display:flex;align-items:center;gap:.34rem;"
+                    (click)="applyGlobalVariableCandidateFromPicker(entry)"
+                  >
+                    <span style="border:1px solid #d7c8ff;background:#f6efff;color:#7c4bb2;border-radius:999px;padding:.03rem .35rem;font-size:.65rem;font-weight:800;line-height:1;">fx</span>
+                    <span>{{ entry.key }}</span>
+                    @if (entry.valueTypeLabel) {
+                      <span style="border:1px solid #cfe0ec;background:#f5faff;color:#486784;border-radius:999px;padding:.06rem .38rem;font-size:.63rem;font-weight:800;line-height:1;text-transform:lowercase;">
+                        {{ entry.valueTypeLabel }}
+                      </span>
+                    }
+                  </button>
+                  @if (entry.isAmbiguous) {
+                    <button
+                      type="button"
+                      style="border:1px solid #e4c08b;border-radius:999px;padding:.08rem .35rem;background:#fff0dc;color:#9d5f2d;font-size:.7rem;font-weight:700;text-transform:uppercase;cursor:pointer;"
+                      (click)="toggleVariablePickerAmbiguousEntry(entry.id)"
+                    >
+                      origen
+                    </button>
+                  }
+                </div>
+
+                @if (entry.isAmbiguous && isVariablePickerAmbiguousEntryExpanded(entry.id)) {
+                  <div style="display:grid;gap:.24rem;">
+                    @for (candidate of entry.candidates; track candidate.id) {
+                      <button
+                        type="button"
+                        style="width:100%;border:1px solid #d0dfef;border-radius:.5rem;background:#ffffff;color:#355775;text-align:left;padding:.28rem .4rem;cursor:pointer;display:grid;gap:.1rem;"
+                        (click)="applyGlobalVariableCandidateFromPicker(entry, candidate)"
+                      >
+                        <span style="font-size:.74rem;font-weight:700;">
+                          {{ candidate.sourceTypeLabel }} en {{ candidate.sourceNodeLabel }}
+                        </span>
+                        <span style="font-size:.72rem;color:#6784a1;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;">
+                          <span>usar {{ candidate.key }}</span>
+                          @if (candidate.valueTypeLabel) {
+                            <span style="border:1px solid #cfe0ec;background:#f5faff;color:#486784;border-radius:999px;padding:.06rem .38rem;font-size:.63rem;font-weight:800;line-height:1;text-transform:lowercase;">
+                              {{ candidate.valueTypeLabel }}
+                            </span>
+                          }
+                        </span>
+                      </button>
+                    }
+                  </div>
+                }
+              </div>
+            }
+            @if (!getFilteredVariablePickerGlobalEntries().length) {
+              <p class="menu-empty" style="margin:0;">No hay variables globales con ese filtro.</p>
+            }
+          </div>
+        </section>
+
+        <section style="border:1px solid #cfdeec;border-radius:.9rem;background:linear-gradient(180deg,#fbfdff 0%,#f4f9ff 100%);padding:.72rem;display:grid;gap:.56rem;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;">
+            <h4 style="margin:0;color:#254667;font-size:.88rem;font-weight:800;">Por origen (Especifico)</h4>
+            <span style="border:1px solid #c3d7eb;border-radius:999px;padding:.14rem .46rem;background:#eef5ff;color:#46698e;font-size:.72rem;font-weight:700;">{{ getFilteredVariablePickerOriginGroups().length }}</span>
+          </div>
+
+          <div style="display:grid;gap:.48rem;">
+            @for (group of getFilteredVariablePickerOriginGroups(); track group.id) {
+              <article style="border:1px solid #d0deec;border-radius:.78rem;background:#ffffff;padding:.56rem .6rem;display:grid;gap:.38rem;">
+                <p style="margin:0;color:#223e5b;font-size:.84rem;font-weight:800;font-family:'JetBrains Mono','Consolas','Courier New',monospace;">
+                  cajon: {{ group.drawerLabel }}
+                </p>
+                <p style="margin:0;color:#5f7994;font-size:.76rem;">
+                  {{ group.sourceName }}
+                </p>
+
+                <div style="display:grid;gap:.26rem;">
+                  @for (variable of group.variables; track variable.id) {
+                    <button
+                      type="button"
+                      style="width:100%;border:1px solid #d2e1ef;border-radius:.6rem;background:#f8fcff;color:#2f567a;text-align:left;padding:.4rem .5rem;cursor:pointer;font-size:.83rem;font-weight:700;display:flex;align-items:center;gap:.34rem;"
+                      (click)="applyVariableFromPicker(variable)"
+                    >
+                      <span style="border:1px solid #d7c8ff;background:#f6efff;color:#7c4bb2;border-radius:999px;padding:.03rem .35rem;font-size:.65rem;font-weight:800;line-height:1;">fx</span>
+                      <span>{{ variable.key }}</span>
+                      @if (variable.valueTypeLabel) {
+                        <span style="margin-left:auto;border:1px solid #cfe0ec;background:#f5faff;color:#486784;border-radius:999px;padding:.06rem .38rem;font-size:.63rem;font-weight:800;line-height:1;text-transform:lowercase;">
+                          {{ variable.valueTypeLabel }}
+                        </span>
+                      }
+                    </button>
+                  }
+                </div>
+              </article>
+            }
+            @if (!getFilteredVariablePickerOriginGroups().length) {
+              <p class="menu-empty" style="margin:0;">No hay cajones por origen con ese filtro.</p>
+            }
+          </div>
+        </section>
+      </div>
+    } @else {
+      <p class="menu-empty">No hay variables JSON configuradas en este workflow.</p>
+    }
+  </div>
+
+  <ng-template pTemplate="footer">
+    <p-button
+      label="Cerrar"
+      severity="secondary"
+      [text]="true"
+      (onClick)="closeVariablePickerDialog()"
+    ></p-button>
+  </ng-template>
+</p-dialog>
+

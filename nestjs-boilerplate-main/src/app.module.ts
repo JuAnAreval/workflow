@@ -66,23 +66,11 @@ const infrastructureDatabaseModule = (databaseConfig() as DatabaseConfig)
     });
 // </database-block>
 
-import { ProjectsModule } from './projects/projects.module';
-
-import { TasksModule } from './tasks/tasks.module';
-
-import { WorkflowsModule } from './workflows/workflows.module';
-
-import { WorkflowNodesModule } from './workflow-nodes/workflow-nodes.module';
-
-import { WorkflowEdgesModule } from './workflow-edges/workflow-edges.module';
+import { WorkflowPlatformModule } from './workflow-platform/workflow-platform.module';
 
 @Module({
   imports: [
-    WorkflowEdgesModule,
-    WorkflowNodesModule,
-    WorkflowsModule,
-    TasksModule,
-    ProjectsModule,
+    WorkflowPlatformModule,
     ConfigModule.forRoot({
       isGlobal: true,
       load: [

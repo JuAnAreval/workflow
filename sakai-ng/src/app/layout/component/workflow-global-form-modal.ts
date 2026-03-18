@@ -1,4 +1,4 @@
-import { CommonModule } from '@angular/common';
+﻿import { CommonModule } from '@angular/common';
 import {
   ChangeDetectorRef,
   Component,
@@ -15,11 +15,31 @@ import { AuthService } from '@/app/core/services/auth/auth.service';
 import {
   WorkflowAssignmentModel,
   WorkflowAssignmentService,
-} from '@/app/core/services/workflow-assignment/workflow-assignment.service';
-import { WorkflowFormRuntimeModalService } from '@/app/core/services/workflow-form-runtime-modal/workflow-form-runtime-modal.service';
+} from '@/app/core/services/workflow/assignment/workflow-assignment.service';
+import { WorkflowFormRuntimeModalService } from '@/app/core/services/workflow/runtime-modal/workflow-form-runtime-modal.service';
+
+type RuntimeFormFieldOption = {
+  value: string;
+  label: string;
+};
 
 type RuntimeFormField = {
+  key: string;
   name: string;
+  label: string;
+  type:
+    | 'text'
+    | 'number'
+    | 'email'
+    | 'password'
+    | 'textarea'
+    | 'select'
+    | 'instruction';
+  required: boolean;
+  placeholder: string;
+  helpText: string;
+  defaultValue: string;
+  options: RuntimeFormFieldOption[];
   value: string;
 };
 
@@ -54,6 +74,7 @@ export class WorkflowGlobalFormModalComponent implements OnInit, OnDestroy {
   isSubmitting = false;
   statusMessage = '';
   title = 'Formulario';
+  message = '';
   assignmentId = '';
   fields: RuntimeFormField[] = [];
 
@@ -114,7 +135,11 @@ export class WorkflowGlobalFormModalComponent implements OnInit, OnDestroy {
       return;
     }
 
-    const target = event.target as HTMLInputElement | null;
+    const target = event.target as
+      | HTMLInputElement
+      | HTMLTextAreaElement
+      | HTMLSelectElement
+      | null;
     field.value = target?.value ?? '';
     this.statusMessage = '';
     this.requestUiRefresh();
@@ -143,6 +168,7 @@ export class WorkflowGlobalFormModalComponent implements OnInit, OnDestroy {
 
       this.visible = false;
       this.assignmentId = '';
+      this.message = '';
       this.fields = [];
       await this.syncPendingFormModal(true);
     } catch {
@@ -203,9 +229,9 @@ export class WorkflowGlobalFormModalComponent implements OnInit, OnDestroy {
     const templateData = this.asRecord(assignment.templateData);
     const contextData = this.asRecord(assignment.contextData);
     const formData = this.asRecord(assignment.formData);
-    const fieldNames = this.extractFieldNames(templateData, formData);
+    const fieldDefinitions = this.extractFieldDefinitions(templateData, formData);
 
-    if (!fieldNames.length) {
+    if (!fieldDefinitions.length) {
       return;
     }
 
@@ -214,51 +240,46 @@ export class WorkflowGlobalFormModalComponent implements OnInit, OnDestroy {
       this.readOptionalString(contextData['formNodeLabel']) ??
       this.readOptionalString(contextData['nodeLabel']) ??
       'Formulario';
-    this.fields = fieldNames.map((fieldName) => ({
-      name: fieldName,
-      value: this.stringifyFieldValue(formData[fieldName]),
+    this.message = this.readOptionalString(templateData['message']) ?? '';
+    this.fields = fieldDefinitions.map((field) => ({
+      ...field,
+      value: this.stringifyFieldValue(
+        formData[field.key] ??
+          (field.defaultValue ? field.defaultValue : ''),
+      ),
     }));
     this.statusMessage = '';
     this.visible = true;
     this.requestUiRefresh();
   }
 
-  private extractFieldNames(
+  private extractFieldDefinitions(
     templateData: Record<string, unknown>,
     formData: Record<string, unknown>,
-  ): string[] {
-    const names: string[] = [];
+  ): RuntimeFormField[] {
+    const fields: RuntimeFormField[] = [];
     const used = new Set<string>();
     const templateFields = templateData['fields'];
 
     if (Array.isArray(templateFields)) {
       for (const rawField of templateFields) {
-        let name = '';
-        if (typeof rawField === 'string') {
-          name = rawField.trim();
-        } else if (this.isPlainObject(rawField)) {
-          const candidate = rawField['name'];
-          if (typeof candidate === 'string') {
-            name = candidate.trim();
-          }
-        }
-
-        if (!name) {
+        const parsed = this.parseFieldDefinition(rawField);
+        if (!parsed) {
           continue;
         }
 
-        const normalized = name.toLowerCase();
+        const normalized = parsed.key.toLowerCase();
         if (used.has(normalized)) {
           continue;
         }
 
         used.add(normalized);
-        names.push(name);
+        fields.push(parsed);
       }
     }
 
-    if (names.length) {
-      return names;
+    if (fields.length) {
+      return fields;
     }
 
     const templateDataCandidates = [
@@ -279,12 +300,12 @@ export class WorkflowGlobalFormModalComponent implements OnInit, OnDestroy {
           continue;
         }
         used.add(normalized);
-        names.push(key);
+        fields.push(this.createDefaultFieldDefinition(key));
       }
     }
 
-    if (names.length) {
-      return names;
+    if (fields.length) {
+      return fields;
     }
 
     for (const keyRaw of Object.keys(formData)) {
@@ -299,67 +320,213 @@ export class WorkflowGlobalFormModalComponent implements OnInit, OnDestroy {
       }
 
       used.add(normalized);
-      names.push(key);
+      fields.push(this.createDefaultFieldDefinition(key));
     }
 
-    return names;
+    return fields;
+  }
+
+  private parseFieldDefinition(rawField: unknown): RuntimeFormField | null {
+    if (typeof rawField === 'string') {
+      const key = rawField.trim();
+      return key ? this.createDefaultFieldDefinition(key) : null;
+    }
+
+    if (!this.isPlainObject(rawField)) {
+      return null;
+    }
+
+    const keyRaw = rawField['key'] ?? rawField['name'];
+    const key = typeof keyRaw === 'string' ? keyRaw.trim() : '';
+    if (!key) {
+      return null;
+    }
+
+    const labelRaw = rawField['label'];
+    const label =
+      typeof labelRaw === 'string' && labelRaw.trim() ? labelRaw.trim() : key;
+    const type = this.normalizeFieldType(rawField['type']);
+    const required =
+      type === 'instruction'
+        ? false
+        : typeof rawField['required'] === 'boolean'
+          ? rawField['required']
+          : true;
+    const options = type === 'select' ? this.normalizeFieldOptions(rawField['options']) : [];
+
+    return {
+      key,
+      name: key,
+      label,
+      type,
+      required,
+      placeholder:
+        typeof rawField['placeholder'] === 'string'
+          ? rawField['placeholder']
+          : '',
+      helpText:
+        typeof rawField['helpText'] === 'string' ? rawField['helpText'] : '',
+      defaultValue:
+        typeof rawField['defaultValue'] === 'string'
+          ? rawField['defaultValue']
+          : '',
+      options,
+      value: '',
+    };
+  }
+
+  private createDefaultFieldDefinition(key: string): RuntimeFormField {
+    return {
+      key,
+      name: key,
+      label: key,
+      type: 'text',
+      required: true,
+      placeholder: '',
+      helpText: '',
+      defaultValue: '',
+      options: [],
+      value: '',
+    };
+  }
+
+  private normalizeFieldType(
+    value: unknown,
+  ):
+    | 'text'
+    | 'number'
+    | 'email'
+    | 'password'
+    | 'textarea'
+    | 'select'
+    | 'instruction' {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (
+      normalized === 'text' ||
+      normalized === 'number' ||
+      normalized === 'email' ||
+      normalized === 'password' ||
+      normalized === 'textarea' ||
+      normalized === 'select' ||
+      normalized === 'instruction'
+    ) {
+      return normalized;
+    }
+
+    return 'text';
+  }
+
+  private normalizeFieldOptions(value: unknown): RuntimeFormFieldOption[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const options: RuntimeFormFieldOption[] = [];
+    const used = new Set<string>();
+    for (const optionRaw of value) {
+      if (!this.isPlainObject(optionRaw)) {
+        continue;
+      }
+
+      const optionValueRaw = optionRaw['value'];
+      const optionValue =
+        typeof optionValueRaw === 'string' ? optionValueRaw.trim() : '';
+      if (!optionValue) {
+        continue;
+      }
+
+      const normalized = optionValue.toLowerCase();
+      if (used.has(normalized)) {
+        continue;
+      }
+      used.add(normalized);
+
+      const optionLabelRaw = optionRaw['label'];
+      const optionLabel =
+        typeof optionLabelRaw === 'string' && optionLabelRaw.trim()
+          ? optionLabelRaw.trim()
+          : optionValue;
+
+      options.push({
+        value: optionValue,
+        label: optionLabel,
+      });
+    }
+
+    return options;
   }
 
   private buildPayload(): Record<string, unknown> | null {
     const payload: Record<string, unknown> = {};
     for (const field of this.fields) {
-      const name = field?.name?.trim();
+      const name = (field?.key || field?.name || '').trim();
+      const label = (field?.label || name || 'campo').trim();
+      const type = field?.type ?? 'text';
+      const required = field?.required !== false;
       const rawValue = typeof field?.value === 'string' ? field.value : '';
+      const trimmedValue = rawValue.trim();
 
       if (!name) {
         continue;
       }
-      if (!rawValue.trim()) {
-        this.statusMessage = `Completa el campo "${name}".`;
+
+      if (type === 'instruction') {
+        continue;
+      }
+
+      if (!trimmedValue) {
+        if (required) {
+          this.statusMessage = `Completa el campo "${label}".`;
+          this.requestUiRefresh();
+          return null;
+        }
+
+        payload[name] = null;
+        continue;
+      }
+
+      if (type === 'number') {
+        const numericValue = Number(trimmedValue);
+        if (!Number.isFinite(numericValue)) {
+          this.statusMessage = `El campo "${label}" debe ser un numero valido.`;
+          this.requestUiRefresh();
+          return null;
+        }
+
+        payload[name] = numericValue;
+        continue;
+      }
+
+      if (type === 'select') {
+        const allowed = new Set(
+          (Array.isArray(field.options) ? field.options : [])
+            .map((option) => String(option?.value ?? '').trim().toLowerCase())
+            .filter((optionValue) => !!optionValue),
+        );
+        if (allowed.size > 0 && !allowed.has(trimmedValue.toLowerCase())) {
+          this.statusMessage = `El campo "${label}" tiene una opcion invalida.`;
+          this.requestUiRefresh();
+          return null;
+        }
+
+        payload[name] = trimmedValue;
+        continue;
+      }
+
+      if (type === 'email' && !this.isValidEmailValue(trimmedValue)) {
+        this.statusMessage = `El campo "${label}" debe ser un email valido.`;
         this.requestUiRefresh();
         return null;
       }
 
-      payload[name] = this.parseInputValue(rawValue);
+      payload[name] = trimmedValue;
     }
 
     return payload;
   }
 
-  private parseInputValue(valueRaw: string): unknown {
-    const trimmed = valueRaw.trim();
-    if (!trimmed) {
-      return '';
-    }
-    if (trimmed === 'true') {
-      return true;
-    }
-    if (trimmed === 'false') {
-      return false;
-    }
-    if (trimmed === 'null') {
-      return null;
-    }
-    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-      const asNumber = Number(trimmed);
-      if (!Number.isNaN(asNumber)) {
-        return asNumber;
-      }
-    }
-
-    if (
-      trimmed.startsWith('{') ||
-      trimmed.startsWith('[') ||
-      (trimmed.startsWith('"') && trimmed.endsWith('"'))
-    ) {
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        return valueRaw;
-      }
-    }
-
-    return valueRaw;
+  private isValidEmailValue(value: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
   }
 
   private stringifyFieldValue(value: unknown): string {
@@ -402,6 +569,7 @@ export class WorkflowGlobalFormModalComponent implements OnInit, OnDestroy {
   private clearModalState(): void {
     this.visible = false;
     this.assignmentId = '';
+    this.message = '';
     this.fields = [];
     this.statusMessage = '';
     this.requestUiRefresh();
@@ -429,3 +597,4 @@ export class WorkflowGlobalFormModalComponent implements OnInit, OnDestroy {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 }
+

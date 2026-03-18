@@ -224,6 +224,36 @@ export class WorkflowsController {
             sourceWorkflowId: { type: 'string', nullable: true },
             nodeLabel: { type: 'string', nullable: true },
             fields: { type: 'array', items: { type: 'string' } },
+            fieldDefinitions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  key: { type: 'string' },
+                  name: { type: 'string' },
+                  label: { type: 'string' },
+                  type: {
+                    type: 'string',
+                    enum: ['text', 'number', 'email', 'password', 'textarea', 'select', 'instruction'],
+                  },
+                  required: { type: 'boolean' },
+                  placeholder: { type: 'string', nullable: true },
+                  helpText: { type: 'string', nullable: true },
+                  defaultValue: { type: 'string', nullable: true },
+                  options: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        value: { type: 'string' },
+                        label: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            message: { type: 'string', nullable: true },
             data: {
               type: 'object',
               additionalProperties: true,
@@ -264,6 +294,36 @@ export class WorkflowsController {
             sourceWorkflowId: { type: 'string', nullable: true },
             nodeLabel: { type: 'string', nullable: true },
             fields: { type: 'array', items: { type: 'string' } },
+            fieldDefinitions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  key: { type: 'string' },
+                  name: { type: 'string' },
+                  label: { type: 'string' },
+                  type: {
+                    type: 'string',
+                    enum: ['text', 'number', 'email', 'password', 'textarea', 'select', 'instruction'],
+                  },
+                  required: { type: 'boolean' },
+                  placeholder: { type: 'string', nullable: true },
+                  helpText: { type: 'string', nullable: true },
+                  defaultValue: { type: 'string', nullable: true },
+                  options: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        value: { type: 'string' },
+                        label: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            message: { type: 'string', nullable: true },
             data: {
               type: 'object',
               additionalProperties: true,
@@ -282,6 +342,36 @@ export class WorkflowsController {
             sourceWorkflowId: { type: 'string', nullable: true },
             nodeLabel: { type: 'string', nullable: true },
             fields: { type: 'array', items: { type: 'string' } },
+            fieldDefinitions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  key: { type: 'string' },
+                  name: { type: 'string' },
+                  label: { type: 'string' },
+                  type: {
+                    type: 'string',
+                    enum: ['text', 'number', 'email', 'password', 'textarea', 'select', 'instruction'],
+                  },
+                  required: { type: 'boolean' },
+                  placeholder: { type: 'string', nullable: true },
+                  helpText: { type: 'string', nullable: true },
+                  defaultValue: { type: 'string', nullable: true },
+                  options: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        value: { type: 'string' },
+                        label: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            message: { type: 'string', nullable: true },
             data: {
               type: 'object',
               additionalProperties: true,

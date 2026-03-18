@@ -26,6 +26,11 @@ import {
 import { WorkflowAssignmentsService } from '../workflow-assignments/workflow-assignments.service';
 import { CompleteWorkflowFormAssignmentDto } from './dto/complete-workflow-form-assignment.dto';
 import { WorkflowAssignmentView } from '../workflow-assignments/workflow-assignments.types';
+import {
+  WorkflowFormFieldDefinition,
+  WorkflowFormFieldOption,
+  WorkflowFormFieldType,
+} from '../workflow-engine/contracts/workflow-form.types';
 
 type HttpRequestTestErrorType =
   | 'http_error'
@@ -63,6 +68,8 @@ type WorkflowFormAssignmentSummary = {
   sourceWorkflowId?: string | null;
   nodeLabel?: string | null;
   fields: string[];
+  fieldDefinitions: WorkflowFormFieldDefinition[];
+  message: string | null;
   data: Record<string, unknown>;
 };
 
@@ -472,6 +479,10 @@ export class WorkflowsService {
     const templateData = this.asRecord(assignment.templateData);
     const contextData = this.asRecord(assignment.contextData);
     const formData = this.asRecord(assignment.formData);
+    const fieldDefinitions = this.extractFormFieldDefinitionsFromTemplateData(
+      templateData,
+      formData,
+    );
 
     return {
       id: assignment.id,
@@ -479,9 +490,193 @@ export class WorkflowsService {
       sourceNodeId: assignment.sourceNodeId ?? null,
       sourceWorkflowId: assignment.sourceWorkflowId ?? null,
       nodeLabel: this.readOptionalString(contextData['formNodeLabel']),
-      fields: this.extractFormFieldsFromTemplateData(templateData),
+      fields: fieldDefinitions
+        .filter((field) => field.type !== 'instruction')
+        .map((field) => field.key),
+      fieldDefinitions,
+      message: this.readOptionalString(templateData['message']),
       data: formData,
     };
+  }
+
+  private extractFormFieldDefinitionsFromTemplateData(
+    templateData: Record<string, unknown>,
+    formData: Record<string, unknown>,
+  ): WorkflowFormFieldDefinition[] {
+    const definitions: WorkflowFormFieldDefinition[] = [];
+    const used = new Set<string>();
+    const rawFields = templateData['fields'];
+
+    if (Array.isArray(rawFields)) {
+      for (const rawField of rawFields) {
+        const definition = this.parseFormFieldDefinitionFromTemplateEntry(rawField);
+        if (!definition) {
+          continue;
+        }
+
+        const normalized = definition.key.toLowerCase();
+        if (used.has(normalized)) {
+          continue;
+        }
+
+        used.add(normalized);
+        definitions.push(definition);
+      }
+    }
+
+    if (definitions.length) {
+      return definitions;
+    }
+
+    const fallbackNames = this.extractFormFieldsFromTemplateData(templateData);
+    for (const key of fallbackNames) {
+      const normalized = key.toLowerCase();
+      if (used.has(normalized)) {
+        continue;
+      }
+      used.add(normalized);
+      definitions.push(this.createDefaultFormFieldDefinition(key));
+    }
+
+    if (definitions.length) {
+      return definitions;
+    }
+
+    for (const keyRaw of Object.keys(formData)) {
+      const key = keyRaw.trim();
+      if (!key) {
+        continue;
+      }
+      const normalized = key.toLowerCase();
+      if (used.has(normalized)) {
+        continue;
+      }
+      used.add(normalized);
+      definitions.push(this.createDefaultFormFieldDefinition(key));
+    }
+
+    return definitions;
+  }
+
+  private parseFormFieldDefinitionFromTemplateEntry(
+    rawField: unknown,
+  ): WorkflowFormFieldDefinition | null {
+    if (typeof rawField === 'string') {
+      const key = rawField.trim();
+      return key ? this.createDefaultFormFieldDefinition(key) : null;
+    }
+
+    if (
+      typeof rawField !== 'object' ||
+      rawField === null ||
+      Array.isArray(rawField)
+    ) {
+      return null;
+    }
+
+    const field = rawField as Record<string, unknown>;
+    const keyRaw = field['key'] ?? field['name'];
+    const key = typeof keyRaw === 'string' ? keyRaw.trim() : '';
+    if (!key) {
+      return null;
+    }
+
+    const labelRaw = field['label'];
+    const label =
+      typeof labelRaw === 'string' && labelRaw.trim() ? labelRaw.trim() : key;
+    const type = this.resolveFormFieldType(field['type']);
+    const required =
+      type === 'instruction'
+        ? false
+        : typeof field['required'] === 'boolean'
+          ? field['required']
+          : true;
+    const placeholder = this.readOptionalString(field['placeholder']);
+    const helpText = this.readOptionalString(field['helpText']);
+    const defaultValue = this.readOptionalString(field['defaultValue']);
+    const options = type === 'select' ? this.resolveFormFieldOptions(field['options']) : [];
+
+    return {
+      key,
+      name: key,
+      label,
+      type,
+      required,
+      placeholder,
+      helpText,
+      defaultValue,
+      options,
+    };
+  }
+
+  private createDefaultFormFieldDefinition(
+    key: string,
+  ): WorkflowFormFieldDefinition {
+    return {
+      key,
+      name: key,
+      label: key,
+      type: 'text',
+      required: true,
+      placeholder: null,
+      helpText: null,
+      defaultValue: null,
+      options: [],
+    };
+  }
+
+  private resolveFormFieldType(value: unknown): WorkflowFormFieldType {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (
+      normalized === 'text' ||
+      normalized === 'number' ||
+      normalized === 'email' ||
+      normalized === 'password' ||
+      normalized === 'textarea' ||
+      normalized === 'select' ||
+      normalized === 'instruction'
+    ) {
+      return normalized;
+    }
+
+    return 'text';
+  }
+
+  private resolveFormFieldOptions(value: unknown): WorkflowFormFieldOption[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const options: WorkflowFormFieldOption[] = [];
+    const used = new Set<string>();
+    for (const rawOption of value) {
+      const option = this.asRecord(rawOption);
+      const optionValueRaw = option['value'];
+      const optionValue =
+        typeof optionValueRaw === 'string' ? optionValueRaw.trim() : '';
+      if (!optionValue) {
+        continue;
+      }
+
+      const normalized = optionValue.toLowerCase();
+      if (used.has(normalized)) {
+        continue;
+      }
+      used.add(normalized);
+
+      const optionLabelRaw = option['label'];
+      const optionLabel =
+        typeof optionLabelRaw === 'string' && optionLabelRaw.trim()
+          ? optionLabelRaw.trim()
+          : optionValue;
+
+      options.push({
+        value: optionValue,
+        label: optionLabel,
+      });
+    }
+
+    return options;
   }
 
   private extractFormFieldsFromTemplateData(
@@ -501,7 +696,9 @@ export class WorkflowsService {
           typeof rawField === 'object' &&
           !Array.isArray(rawField)
         ) {
-          const rawName = (rawField as Record<string, unknown>)['name'];
+          const rawName =
+            (rawField as Record<string, unknown>)['key'] ??
+            (rawField as Record<string, unknown>)['name'];
           if (typeof rawName === 'string') {
             candidateName = rawName.trim();
           }

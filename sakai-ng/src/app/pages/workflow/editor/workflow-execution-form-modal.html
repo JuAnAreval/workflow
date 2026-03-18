@@ -6,19 +6,21 @@
   [dismissableMask]="!isSubmitting"
   [closable]="!isSubmitting"
   [appendTo]="'body'"
-  [baseZIndex]="13000"
+  [baseZIndex]="12000"
   [style]="{ width: '42rem', maxWidth: '96vw' }"
-  (onHide)="close()"
+  (onHide)="onHide()"
 >
   <ng-template pTemplate="header">
     <span class="workflow-name-modal-title">
-      Completar formulario: {{ title }}
+      Completar formulario: {{ title || 'Formulario' }}
     </span>
   </ng-template>
 
   <div class="workflow-name-modal-body">
     <div class="menu-intro">
-      <p>Este workflow esta en pausa. Completa los campos para continuar.</p>
+      <p>
+        Este workflow esta en pausa. Completa los campos para continuar la ejecucion.
+      </p>
     </div>
 
     @if (message) {
@@ -97,12 +99,12 @@
       severity="secondary"
       [text]="true"
       [disabled]="isSubmitting"
-      (onClick)="close()"
+      (onClick)="requestClose()"
     ></p-button>
     <p-button
       [label]="isSubmitting ? 'Guardando...' : 'Guardar y continuar'"
       [disabled]="isSubmitting"
-      (onClick)="submit()"
+      (onClick)="requestSubmit()"
     ></p-button>
   </ng-template>
 </p-dialog>
