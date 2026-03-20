@@ -27,6 +27,11 @@ import {
   WorkflowAssignmentUserSummary,
   WorkflowAssignmentView,
 } from './workflow-assignments.types';
+import {
+  WorkflowFormFieldDefinition,
+  WorkflowFormFieldOption,
+  WorkflowFormFieldType,
+} from '../workflow-engine/contracts/workflow-form.types';
 
 @Injectable()
 export class WorkflowAssignmentsService {
@@ -318,10 +323,13 @@ export class WorkflowAssignmentsService {
       );
     }
 
-    const formFieldNames = this.readFormFieldNamesFromTemplateData(
-      assignment.templateData ?? {},
+    const templateData = this.asRecord(assignment.templateData ?? {});
+    const currentFormData = this.asRecord(assignment.formData ?? {});
+    const formFieldDefinitions = this.resolveFormFieldDefinitionsFromTemplateData(
+      templateData,
+      currentFormData,
     );
-    if (!formFieldNames.length) {
+    if (!formFieldDefinitions.length) {
       throw new UnprocessableEntityException(
         'El formulario no tiene campos configurados.',
       );
@@ -329,26 +337,31 @@ export class WorkflowAssignmentsService {
 
     const submittedData = this.asRecord(payload?.data);
     const normalizedFormData: WorkflowAssignmentData = {};
-    for (const fieldName of formFieldNames) {
-      if (!Object.prototype.hasOwnProperty.call(submittedData, fieldName)) {
-        throw new UnprocessableEntityException(
-          `Falta completar el campo requerido "${fieldName}".`,
-        );
+    for (const fieldDefinition of formFieldDefinitions) {
+      if (fieldDefinition.type === 'instruction') {
+        continue;
       }
 
-      const fieldValue = submittedData[fieldName];
-      if (typeof fieldValue === 'string' && !fieldValue.trim()) {
-        throw new UnprocessableEntityException(
-          `El campo "${fieldName}" no puede estar vacio.`,
-        );
-      }
-      if (fieldValue === undefined) {
-        throw new UnprocessableEntityException(
-          `El campo "${fieldName}" no puede estar vacio.`,
-        );
+      const fieldKey = String(fieldDefinition.key ?? '').trim();
+      if (!fieldKey) {
+        continue;
       }
 
-      normalizedFormData[fieldName] = fieldValue;
+      const submittedValue = Object.prototype.hasOwnProperty.call(
+        submittedData,
+        fieldKey,
+      )
+        ? submittedData[fieldKey]
+        : currentFormData[fieldKey];
+      const normalized = this.normalizeSubmittedFormFieldValue(
+        fieldDefinition,
+        submittedValue,
+      );
+      if (!normalized.ok) {
+        throw new UnprocessableEntityException(normalized.errorMessage);
+      }
+
+      normalizedFormData[fieldKey] = normalized.value;
     }
 
     const completedAt = new Date();
@@ -775,6 +788,322 @@ export class WorkflowAssignmentsService {
       .trim();
   }
 
+  private resolveFormFieldDefinitionsFromTemplateData(
+    templateData: WorkflowAssignmentData,
+    formData: WorkflowAssignmentData,
+  ): WorkflowFormFieldDefinition[] {
+    const definitions: WorkflowFormFieldDefinition[] = [];
+    const used = new Set<string>();
+    const rawFields = templateData['fields'];
+
+    if (Array.isArray(rawFields)) {
+      for (const rawField of rawFields) {
+        const parsed = this.parseFormFieldDefinitionFromTemplateEntry(rawField);
+        if (!parsed) {
+          continue;
+        }
+
+        const normalized = parsed.key.toLowerCase();
+        if (used.has(normalized)) {
+          continue;
+        }
+
+        used.add(normalized);
+        definitions.push(parsed);
+      }
+    }
+
+    if (definitions.length) {
+      return definitions;
+    }
+
+    const fallbackFieldNames = this.readFormFieldNamesFromTemplateData(templateData);
+    for (const fieldName of fallbackFieldNames) {
+      const normalized = fieldName.toLowerCase();
+      if (used.has(normalized)) {
+        continue;
+      }
+
+      used.add(normalized);
+      definitions.push(this.createDefaultFormFieldDefinition(fieldName));
+    }
+
+    if (definitions.length) {
+      return definitions;
+    }
+
+    if (this.isPlainObject(formData)) {
+      for (const keyRaw of Object.keys(formData)) {
+        const key = keyRaw.trim();
+        if (!key) {
+          continue;
+        }
+
+        const normalized = key.toLowerCase();
+        if (used.has(normalized)) {
+          continue;
+        }
+
+        used.add(normalized);
+        definitions.push(this.createDefaultFormFieldDefinition(key));
+      }
+    }
+
+    return definitions;
+  }
+
+  private parseFormFieldDefinitionFromTemplateEntry(
+    rawField: unknown,
+  ): WorkflowFormFieldDefinition | null {
+    if (typeof rawField === 'string') {
+      const key = rawField.trim();
+      return key ? this.createDefaultFormFieldDefinition(key) : null;
+    }
+
+    if (!this.isPlainObject(rawField)) {
+      return null;
+    }
+
+    const keyRaw = rawField['key'] ?? rawField['name'];
+    const key = typeof keyRaw === 'string' ? keyRaw.trim() : '';
+    if (!key) {
+      return null;
+    }
+
+    const labelRaw = rawField['label'];
+    const label =
+      typeof labelRaw === 'string' && labelRaw.trim() ? labelRaw.trim() : key;
+    const type = this.resolveFormFieldType(rawField['type']);
+    const required =
+      type === 'instruction'
+        ? false
+        : typeof rawField['required'] === 'boolean'
+          ? rawField['required']
+          : true;
+    const placeholder = this.readOptionalString(rawField['placeholder']);
+    const helpText = this.readOptionalString(rawField['helpText']);
+    const defaultValue = this.readOptionalString(rawField['defaultValue']);
+    const options = type === 'select' ? this.resolveFormFieldOptions(rawField['options']) : [];
+
+    return {
+      key,
+      name: key,
+      label,
+      type,
+      required,
+      placeholder,
+      helpText,
+      defaultValue,
+      options,
+    };
+  }
+
+  private createDefaultFormFieldDefinition(
+    key: string,
+  ): WorkflowFormFieldDefinition {
+    return {
+      key,
+      name: key,
+      label: key,
+      type: 'text',
+      required: true,
+      placeholder: null,
+      helpText: null,
+      defaultValue: null,
+      options: [],
+    };
+  }
+
+  private resolveFormFieldType(value: unknown): WorkflowFormFieldType {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (
+      normalized === 'text' ||
+      normalized === 'number' ||
+      normalized === 'email' ||
+      normalized === 'password' ||
+      normalized === 'textarea' ||
+      normalized === 'select' ||
+      normalized === 'instruction'
+    ) {
+      return normalized;
+    }
+
+    return 'text';
+  }
+
+  private resolveFormFieldOptions(value: unknown): WorkflowFormFieldOption[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const options: WorkflowFormFieldOption[] = [];
+    const used = new Set<string>();
+    for (const rawOption of value) {
+      if (!this.isPlainObject(rawOption)) {
+        continue;
+      }
+
+      const optionValueRaw = rawOption['value'];
+      const optionValue =
+        typeof optionValueRaw === 'string' ? optionValueRaw.trim() : '';
+      if (!optionValue) {
+        continue;
+      }
+
+      const normalized = optionValue.toLowerCase();
+      if (used.has(normalized)) {
+        continue;
+      }
+      used.add(normalized);
+
+      const optionLabelRaw = rawOption['label'];
+      const optionLabel =
+        typeof optionLabelRaw === 'string' && optionLabelRaw.trim()
+          ? optionLabelRaw.trim()
+          : optionValue;
+
+      options.push({
+        value: optionValue,
+        label: optionLabel,
+      });
+    }
+
+    return options;
+  }
+
+  private normalizeSubmittedFormFieldValue(
+    field: WorkflowFormFieldDefinition,
+    rawValue: unknown,
+  ):
+    | { ok: true; value: unknown }
+    | { ok: false; errorMessage: string } {
+    const fieldLabel = field.label?.trim() || field.key;
+
+    if (field.type === 'instruction') {
+      return {
+        ok: true,
+        value: null,
+      };
+    }
+
+    if (field.type === 'number') {
+      if (rawValue === null || rawValue === undefined || rawValue === '') {
+        if (field.required) {
+          return {
+            ok: false,
+            errorMessage: `El campo "${fieldLabel}" no puede estar vacio.`,
+          };
+        }
+
+        return {
+          ok: true,
+          value: null,
+        };
+      }
+
+      if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+        return {
+          ok: true,
+          value: rawValue,
+        };
+      }
+
+      const asString =
+        typeof rawValue === 'string' ? rawValue.trim() : String(rawValue).trim();
+      if (!asString) {
+        if (field.required) {
+          return {
+            ok: false,
+            errorMessage: `El campo "${fieldLabel}" no puede estar vacio.`,
+          };
+        }
+        return {
+          ok: true,
+          value: null,
+        };
+      }
+
+      const asNumber = Number(asString);
+      if (!Number.isFinite(asNumber)) {
+        return {
+          ok: false,
+          errorMessage: `El campo "${fieldLabel}" debe ser un numero valido.`,
+        };
+      }
+
+      return {
+        ok: true,
+        value: asNumber,
+      };
+    }
+
+    if (field.type === 'select') {
+      const asString =
+        typeof rawValue === 'string' ? rawValue.trim() : String(rawValue ?? '').trim();
+      if (!asString) {
+        if (field.required) {
+          return {
+            ok: false,
+            errorMessage: `El campo "${fieldLabel}" no puede estar vacio.`,
+          };
+        }
+        return {
+          ok: true,
+          value: null,
+        };
+      }
+
+      const allowed = new Set(
+        field.options
+          .map((option) => option.value.trim().toLowerCase())
+          .filter((optionValue) => !!optionValue),
+      );
+      if (allowed.size > 0 && !allowed.has(asString.toLowerCase())) {
+        return {
+          ok: false,
+          errorMessage: `El campo "${fieldLabel}" tiene una opcion invalida.`,
+        };
+      }
+
+      return {
+        ok: true,
+        value: asString,
+      };
+    }
+
+    const asString = typeof rawValue === 'string' ? rawValue : String(rawValue ?? '');
+    const trimmed = asString.trim();
+    if (!trimmed) {
+      if (field.required) {
+        return {
+          ok: false,
+          errorMessage: `El campo "${fieldLabel}" no puede estar vacio.`,
+        };
+      }
+
+      return {
+        ok: true,
+        value: null,
+      };
+    }
+
+    if (field.type === 'email' && !this.isValidEmailValue(trimmed)) {
+      return {
+        ok: false,
+        errorMessage: `El campo "${fieldLabel}" debe ser un email valido.`,
+      };
+    }
+
+    return {
+      ok: true,
+      value: trimmed,
+    };
+  }
+
+  private isValidEmailValue(value: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  }
+
   private readFormFieldNamesFromTemplateData(
     templateData: WorkflowAssignmentData,
   ): string[] {
@@ -788,7 +1117,7 @@ export class WorkflowAssignmentsService {
         if (typeof rawField === 'string') {
           candidateName = rawField.trim();
         } else if (this.isPlainObject(rawField)) {
-          const nameValue = rawField['name'];
+          const nameValue = rawField['key'] ?? rawField['name'];
           if (typeof nameValue === 'string') {
             candidateName = nameValue.trim();
           }
@@ -821,6 +1150,15 @@ export class WorkflowAssignmentsService {
           continue;
         }
         if (normalizedKey.toLowerCase() === 'assigneduserid') {
+          continue;
+        }
+        if (normalizedKey.toLowerCase() === 'data') {
+          continue;
+        }
+        if (normalizedKey.toLowerCase() === 'message') {
+          continue;
+        }
+        if (normalizedKey.toLowerCase() === 'messagetemplate') {
           continue;
         }
 

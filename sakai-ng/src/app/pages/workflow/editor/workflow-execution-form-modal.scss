@@ -2,15 +2,6 @@
   display: contents;
 }
 
-.workflow-name-modal-title {
-  font-weight: 700;
-}
-
-.workflow-name-modal-body {
-  display: grid;
-  gap: 0.75rem;
-}
-
 .workflow-form-message {
   border: 1px solid #d2e2ef;
   border-radius: 0.6rem;
@@ -23,27 +14,6 @@
   color: #2b4f70;
   font-size: 0.9rem;
   line-height: 1.35;
-}
-
-.menu-intro p {
-  margin: 0;
-  color: var(--text-color-secondary, #64748b);
-}
-
-.menu-empty {
-  margin: 0;
-  color: #b91c1c;
-  font-size: 0.9rem;
-}
-
-.menu-field {
-  display: grid;
-  gap: 0.35rem;
-}
-
-.menu-field > span {
-  font-size: 0.9rem;
-  font-weight: 600;
 }
 
 .menu-field-label {
@@ -62,21 +32,6 @@
   font-weight: 700;
   line-height: 1;
   background: #eef5fb;
-}
-
-.menu-input {
-  width: 100%;
-  border: 1px solid var(--surface-border, #cbd5e1);
-  border-radius: 0.45rem;
-  padding: 0.55rem 0.65rem;
-  font: inherit;
-  background: var(--surface-card, #fff);
-}
-
-.menu-input:focus {
-  outline: none;
-  border-color: var(--primary-color, #3b82f6);
-  box-shadow: 0 0 0 0.1rem color-mix(in srgb, var(--primary-color, #3b82f6) 22%, transparent);
 }
 
 .menu-field-help {

@@ -53,6 +53,32 @@ export type WorkflowSavedJsonListResponse = {
   data: WorkflowSavedJsonRecord[];
 };
 
+export type WorkflowFormFieldType =
+  | 'text'
+  | 'number'
+  | 'email'
+  | 'password'
+  | 'textarea'
+  | 'select'
+  | 'instruction';
+
+export type WorkflowFormFieldOption = {
+  value: string;
+  label: string;
+};
+
+export type WorkflowFormFieldDefinitionSummary = {
+  key: string;
+  name: string;
+  label: string;
+  type: WorkflowFormFieldType;
+  required: boolean;
+  placeholder: string | null;
+  helpText: string | null;
+  defaultValue: string | null;
+  options: WorkflowFormFieldOption[];
+};
+
 export type WorkflowFormAssignmentPrompt = {
   id: string;
   assignedToUserId: number;
@@ -60,6 +86,8 @@ export type WorkflowFormAssignmentPrompt = {
   sourceWorkflowId?: string | null;
   nodeLabel?: string | null;
   fields: string[];
+  fieldDefinitions?: WorkflowFormFieldDefinitionSummary[] | null;
+  message?: string | null;
   data: Record<string, unknown>;
 };
 

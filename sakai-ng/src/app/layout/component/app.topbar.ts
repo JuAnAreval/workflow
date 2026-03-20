@@ -1,11 +1,12 @@
-import { Component, OnInit, inject } from '@angular/core';
+﻿import { Component, OnInit, inject } from '@angular/core';
 import { MenuItem } from 'primeng/api';
+import { afterNextRender, signal } from '@angular/core';
 import { Router, RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { StyleClassModule } from 'primeng/styleclass';
 import { AppConfigurator } from './app.configurator';
 import { LayoutService } from '@/app/layout/service/layout.service';
-import { WorkflowAssignmentService } from '@/app/core/services/workflow-assignment/workflow-assignment.service';
+import { WorkflowAssignmentService } from '@/app/core/services/workflow/assignment/workflow-assignment.service';
 import { AuthService } from '@/app/core/services/auth/auth.service';
 
 @Component({
@@ -74,8 +75,8 @@ import { AuthService } from '@/app/core/services/auth/auth.service';
                         <i class="pi pi-bell"></i>
                         <span>
                             Pendientes
-                            @if (pendingWorkflowCount > 0) {
-                                ({{ pendingWorkflowCount }})
+                            @if (pendingWorkflowCount() > 0) {
+                                ({{ pendingWorkflowCount() }})
                             }
                         </span>
                     </button>
@@ -96,27 +97,33 @@ import { AuthService } from '@/app/core/services/auth/auth.service';
         </div>
     </div>`
 })
-export class AppTopbar implements OnInit {
+export class AppTopbar {
     items!: MenuItem[];
 
     layoutService = inject(LayoutService);
     private readonly authService = inject(AuthService);
     private readonly workflowAssignmentService = inject(WorkflowAssignmentService);
     private readonly router = inject(Router);
-    pendingWorkflowCount = 0;
+    readonly pendingWorkflowCount = signal(0);
 
-    ngOnInit(): void {
+    constructor() {
+        afterNextRender(() => {
+            this.loadPendingWorkflowCount();
+        });
+    }
+
+    private loadPendingWorkflowCount(): void {
         if (!this.authService.getCurrentUserId()) {
-            this.pendingWorkflowCount = 0;
+            this.pendingWorkflowCount.set(0);
             return;
         }
 
         this.workflowAssignmentService.GetMyPendingCount().subscribe({
             next: (response) => {
-                this.pendingWorkflowCount = Number(response?.count ?? 0);
+                this.pendingWorkflowCount.set(Number(response?.count ?? 0));
             },
             error: () => {
-                this.pendingWorkflowCount = 0;
+                this.pendingWorkflowCount.set(0);
             }
         });
     }
@@ -132,3 +139,4 @@ export class AppTopbar implements OnInit {
         this.router.navigate(['/pages/workflow/inbox']);
     }
 }
+
