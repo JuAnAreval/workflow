@@ -11,6 +11,12 @@
             <span class="state-pill loading">Cargando</span>
           } @else if (isSaving) {
             <span class="state-pill saving">Guardando</span>
+          } @else if (isAutosavingNode) {
+            <span class="state-pill saving">Autoguardando</span>
+          } @else if (hasLocalNodeDrafts()) {
+            <span class="state-pill connect">Borrador local</span>
+          } @else if (nodeDraftSyncState === 'saved') {
+            <span class="state-pill ready">Autoguardado</span>
           } @else {
             <span class="state-pill ready">Listo</span>
           }
@@ -31,6 +37,26 @@
       <button type="button" class="topbar-btn topbar-btn-strong" (click)="goToWorkflowList()">
         <i class="pi pi-list"></i>
         Workflows
+      </button>
+      <button
+        type="button"
+        class="topbar-btn"
+        [disabled]="!activeWorkflowId || isSaving || isAutosavingNode || !canUndoHistory()"
+        (click)="undoHistory()"
+        title="Deshacer (Ctrl+Z)"
+      >
+        <i class="pi pi-undo"></i>
+        Deshacer
+      </button>
+      <button
+        type="button"
+        class="topbar-btn"
+        [disabled]="!activeWorkflowId || isSaving || isAutosavingNode || !canRedoHistory()"
+        (click)="redoHistory()"
+        title="Rehacer (Ctrl+Y / Ctrl+Shift+Z)"
+      >
+        <i class="pi pi-refresh"></i>
+        Rehacer
       </button>
       <button
         type="button"
@@ -2245,6 +2271,17 @@
             }
 
             <div class="menu-action-row">
+              @if (shouldShowNodeDraftSyncStatus()) {
+                <p
+                  class="menu-draft-status"
+                  [class.saving]="nodeDraftSyncState === 'saving'"
+                  [class.error]="nodeDraftSyncState === 'error'"
+                  [class.local]="nodeDraftSyncState === 'local' || nodeDraftSyncState === 'dirty'"
+                  [class.saved]="nodeDraftSyncState === 'saved'"
+                >
+                  {{ getNodeDraftSyncLabel() }}
+                </p>
+              }
               <button
                 type="button"
                 class="menu-btn menu-btn-secondary"

@@ -13,11 +13,12 @@
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
+import { firstValueFrom } from 'rxjs';
 import { ButtonModule } from 'primeng/button';
 import { DrawerModule } from 'primeng/drawer';
 import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
-import cytoscape, { Core, NodeSingular } from 'cytoscape';
+import cytoscape, { Core, EdgeSingular, NodeSingular } from 'cytoscape';
 import nodeHtmlLabel from 'cytoscape-node-html-label';
 import { AuthService } from '@/app/core/services/auth/auth.service';
 import { WorkflowEdgeService } from '@/app/core/services/workflow/edge/workflow-edge.service';
@@ -51,7 +52,9 @@ import {
   NodeKind,
   NodeTemplate,
   RightMenuMode,
+  WorkflowEdgeModel,
   WorkflowModel,
+  WorkflowNodeModel,
   WorkflowTriggerEvent,
 } from './workflow-editor.types';
 import {
@@ -94,6 +97,10 @@ import {
   VariablePickerOriginGroup,
   WorkflowVariableSourceType,
 } from './workflow-variable-picker.utils';
+import {
+  addEdgeToGraph,
+  addNodeToGraph,
+} from './workflow-graph-runtime.utils';
 import { WorkflowEditorRuntimeBase } from './workflow-editor.runtime.base';
 
 (nodeHtmlLabel as unknown as (cy: typeof cytoscape) => void)(cytoscape);
@@ -111,6 +118,111 @@ type DateTimeParts = {
   minute: number;
   second: number;
 };
+
+type NodeDraftSyncState =
+  | 'idle'
+  | 'dirty'
+  | 'local'
+  | 'saving'
+  | 'saved'
+  | 'error';
+
+type WorkflowNodeEditorDraftSnapshot = {
+  workflowId: string;
+  nodeId: string;
+  editNodeType: string;
+  editNodeLabel: string;
+  editNodeConfig: string;
+  useRawConfigEditor: boolean;
+  triggerOnCreated: boolean;
+  triggerOnUpdated: boolean;
+  triggerOnDeleted: boolean;
+  triggerWebhookToken: string;
+  triggerWebhookResponse: string;
+  triggerScheduleMode: 'once' | 'recurring';
+  triggerScheduleEnabled: boolean;
+  triggerScheduleTimezone: string;
+  triggerScheduleOnceAt: string;
+  triggerScheduleRecurringType: 'hourly' | 'daily' | 'weekly' | 'monthly';
+  triggerScheduleMinute: number;
+  triggerScheduleTime: string;
+  triggerScheduleWeekdays: number[];
+  triggerScheduleDayOfMonth: number;
+  conditionField: string;
+  conditionOperator: ConditionOperator;
+  conditionValue: string;
+  conditionTree: ConditionGroupDraft;
+  decisionIfLogicalOperator: DecisionLogicalOperator;
+  decisionIfRules: DecisionRuleDraft[];
+  decisionSwitchCases: DecisionRuleDraft[];
+  actionAssignedUserId: string;
+  actionProjectName: string;
+  actionProjectDescription: string;
+  actionTaskName: string;
+  actionTaskDescription: string;
+  actionTaskEstado: string;
+  actionUserFirstName: string;
+  actionUserLastName: string;
+  actionUserEmail: string;
+  actionUserPassword: string;
+  actionUserRoleId: string;
+  actionUserStatusId: string;
+  actionFormFields: JsonFieldDraft[];
+  actionFormMessageTemplate: string;
+  actionHttpUrl: string;
+  actionHttpMethod: string;
+  actionHttpHeaders: Array<{ name: string; value: string }>;
+  actionHttpBody: string;
+  actionHttpResponse: string;
+  actionJavascriptInputs: JavascriptInputDraft[];
+  actionJavascriptCode: string;
+  actionJavascriptResultKey: string;
+  actionJavascriptResponse: string;
+};
+
+type StoredWorkflowNodeEditorDraft = {
+  version: 1;
+  savedAt: string;
+  snapshot: WorkflowNodeEditorDraftSnapshot;
+};
+
+type WorkflowGraphHistoryDomain = 'node' | 'graph';
+
+type WorkflowGraphNodeHistorySeed = {
+  historyId: string;
+  label: string;
+  type: string;
+  config: string;
+  posX: number;
+  posY: number;
+};
+
+type WorkflowGraphEdgeHistorySeed = {
+  historyId: string;
+  sourceHistoryId: string;
+  targetHistoryId: string;
+  routeKey: string | null;
+};
+
+type WorkflowGraphMoveHistoryEntry = {
+  kind: 'move';
+  nodeHistoryId: string;
+  before: { x: number; y: number };
+  after: { x: number; y: number };
+};
+
+type WorkflowGraphMutationHistoryEntry =
+  | {
+      kind: 'create';
+      nodes: WorkflowGraphNodeHistorySeed[];
+      edges: WorkflowGraphEdgeHistorySeed[];
+    }
+  | {
+      kind: 'delete';
+      nodes: WorkflowGraphNodeHistorySeed[];
+      edges: WorkflowGraphEdgeHistorySeed[];
+    }
+  | WorkflowGraphMoveHistoryEntry;
 
 const SCHEDULE_FALLBACK_TIMEZONES: ReadonlyArray<string> = [
   'America/Bogota',
@@ -377,6 +489,9 @@ export class WorkflowEditorPage
   private readonly adderOffsetY = 124;
   private readonly adderDragThreshold = 10;
   private readonly copiedNodesOffset = 44;
+  private readonly nodeEditorDraftStoragePrefix = 'workflow-editor-draft:v1';
+  private readonly nodeEditorAutosaveDelayMs = 1000;
+  private readonly nodeEditorHistoryMergeWindowMs = 450;
   private readonly useHtmlNodeLabelsExperiment = true;
 
   private readonly authService = inject(AuthService);
@@ -402,6 +517,7 @@ export class WorkflowEditorPage
   private suppressNextAdderTap = false;
   private copiedNodeDrafts: CopiedNodeDraft[] = [];
   private copiedNodesPasteCount = 0;
+  private graphHistoryIdentitySequence = 0;
   private decisionRuleDraftSequence = 0;
   private javascriptInputDraftSequence = 0;
   private readonly variableFieldSelections: Partial<
@@ -425,12 +541,44 @@ export class WorkflowEditorPage
   private lastJavascriptMonacoNodeId = '';
   private isJavascriptMonacoLoading = false;
   private isSyncingJavascriptCodeFromMonaco = false;
+  private nodeEditorAutosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private nodeEditorDraftTrackingQueued = false;
+  private nodeEditorAutosaveQueued = false;
+  private isApplyingStoredNodeEditorDraft = false;
+  private isApplyingNodeDraftHistory = false;
+  private isApplyingWorkflowGraphHistory = false;
+  private lastObservedNodeEditorDraftSignature = '';
+  private lastNodeEditorHistoryKey = '';
+  private lastNodeEditorHistoryRecordedAt = 0;
+  private readonly syncedNodeEditorDraftSignatures = new Map<string, string>();
+  private readonly dirtyNodeEditorDraftKeys = new Set<string>();
+  private readonly workflowGraphNodeHistoryIdByBackendId = new Map<string, string>();
+  private readonly workflowGraphNodeBackendIdByHistoryId = new Map<string, string>();
+  private readonly workflowGraphEdgeHistoryIdByBackendId = new Map<string, string>();
+  private readonly workflowGraphEdgeBackendIdByHistoryId = new Map<string, string>();
+  private readonly nodeEditorUndoStacks = new Map<
+    string,
+    WorkflowNodeEditorDraftSnapshot[]
+  >();
+  private readonly nodeEditorRedoStacks = new Map<
+    string,
+    WorkflowNodeEditorDraftSnapshot[]
+  >();
+  private readonly workflowGraphUndoStack: WorkflowGraphMutationHistoryEntry[] = [];
+  private readonly workflowGraphRedoStack: WorkflowGraphMutationHistoryEntry[] = [];
+  private readonly workflowHistoryRedoDomains: WorkflowGraphHistoryDomain[] = [];
+  private readonly nodeDragStartPositions = new Map<
+    string,
+    { x: number; y: number }
+  >();
 
   isLoading = false;
   isSaving = false;
+  isAutosavingNode = false;
   isExecutingManual = false;
   isSubmittingExecutionForm = false;
   isConnectMode = false;
+  nodeDraftSyncState: NodeDraftSyncState = 'idle';
 
   activeWorkflowId: string | null = null;
   activeWorkflowName = '';
@@ -604,6 +752,304 @@ export class WorkflowEditorPage
     }
 
     return 'workflow-right-drawer workflow-right-drawer--default';
+  }
+
+  shouldShowNodeDraftSyncStatus(): boolean {
+    return (
+      this.rightMenuMode === 'edit' &&
+      !!this.editNodeId.trim() &&
+      this.nodeDraftSyncState !== 'idle'
+    );
+  }
+
+  getNodeDraftSyncLabel(): string {
+    if (this.nodeDraftSyncState === 'saving') {
+      return 'Autoguardando cambios...';
+    }
+    if (this.nodeDraftSyncState === 'dirty') {
+      return 'Cambios pendientes. Se autoguardaran en breve.';
+    }
+    if (this.nodeDraftSyncState === 'local') {
+      return 'Borrador local. Completa el nodo para autoguardarlo en el backend.';
+    }
+    if (this.nodeDraftSyncState === 'error') {
+      return 'No se pudo autoguardar. El borrador sigue guardado localmente.';
+    }
+    if (this.nodeDraftSyncState === 'saved') {
+      return 'Autoguardado.';
+    }
+
+    return '';
+  }
+
+  hasLocalNodeDrafts(): boolean {
+    return this.dirtyNodeEditorDraftKeys.size > 0;
+  }
+
+  canUndoNodeDraft(): boolean {
+    const historyKey = this.getCurrentNodeEditorHistoryKey();
+    if (!historyKey) {
+      return false;
+    }
+
+    return (this.nodeEditorUndoStacks.get(historyKey)?.length ?? 0) > 1;
+  }
+
+  canRedoNodeDraft(): boolean {
+    const historyKey = this.getCurrentNodeEditorHistoryKey();
+    if (!historyKey) {
+      return false;
+    }
+
+    return (this.nodeEditorRedoStacks.get(historyKey)?.length ?? 0) > 0;
+  }
+
+  undoNodeDraft(): void {
+    this.processNodeEditorDraftTracking();
+
+    const historyKey = this.getCurrentNodeEditorHistoryKey();
+    if (!historyKey) {
+      return;
+    }
+
+    const undoStack = this.nodeEditorUndoStacks.get(historyKey);
+    if (!undoStack || undoStack.length < 2) {
+      return;
+    }
+
+    const currentSnapshot = undoStack.pop();
+    const previousSnapshot = undoStack[undoStack.length - 1];
+    if (!currentSnapshot || !previousSnapshot) {
+      return;
+    }
+
+    const redoStack = this.nodeEditorRedoStacks.get(historyKey) ?? [];
+    redoStack.push(this.cloneNodeEditorDraftSnapshot(currentSnapshot));
+    this.nodeEditorRedoStacks.set(historyKey, redoStack);
+    this.nodeEditorUndoStacks.set(historyKey, undoStack);
+    this.lastNodeEditorHistoryKey = historyKey;
+    this.lastNodeEditorHistoryRecordedAt = Date.now();
+    this.applyNodeDraftHistorySnapshot(previousSnapshot);
+  }
+
+  redoNodeDraft(): void {
+    const historyKey = this.getCurrentNodeEditorHistoryKey();
+    if (!historyKey) {
+      return;
+    }
+
+    const redoStack = this.nodeEditorRedoStacks.get(historyKey);
+    if (!redoStack?.length) {
+      return;
+    }
+
+    const nextSnapshot = redoStack.pop();
+    if (!nextSnapshot) {
+      return;
+    }
+
+    const undoStack = this.nodeEditorUndoStacks.get(historyKey) ?? [];
+    undoStack.push(this.cloneNodeEditorDraftSnapshot(nextSnapshot));
+    this.nodeEditorUndoStacks.set(historyKey, undoStack);
+    this.nodeEditorRedoStacks.set(historyKey, redoStack);
+    this.lastNodeEditorHistoryKey = historyKey;
+    this.lastNodeEditorHistoryRecordedAt = Date.now();
+    this.applyNodeDraftHistorySnapshot(nextSnapshot);
+  }
+
+  canUndoWorkflowGraph(): boolean {
+    return this.workflowGraphUndoStack.length > 0;
+  }
+
+  canRedoWorkflowGraph(): boolean {
+    return this.workflowGraphRedoStack.length > 0;
+  }
+
+  canUndoHistory(): boolean {
+    return this.canUndoNodeDraft() || this.canUndoWorkflowGraph();
+  }
+
+  canRedoHistory(): boolean {
+    const pendingDomain =
+      this.workflowHistoryRedoDomains[
+        this.workflowHistoryRedoDomains.length - 1
+      ] ?? null;
+    if (pendingDomain === 'node') {
+      return this.canRedoNodeDraft();
+    }
+    if (pendingDomain === 'graph') {
+      return this.canRedoWorkflowGraph();
+    }
+
+    return this.canRedoNodeDraft() || this.canRedoWorkflowGraph();
+  }
+
+  undoHistory(): void {
+    if (this.isSaving || this.isAutosavingNode || this.isApplyingWorkflowGraphHistory) {
+      return;
+    }
+
+    if (this.canUndoNodeDraft()) {
+      this.undoNodeDraft();
+      this.workflowHistoryRedoDomains.push('node');
+      return;
+    }
+
+    if (this.canUndoWorkflowGraph()) {
+      void this.undoWorkflowGraph();
+    }
+  }
+
+  redoHistory(): void {
+    if (this.isSaving || this.isAutosavingNode || this.isApplyingWorkflowGraphHistory) {
+      return;
+    }
+
+    const pendingDomain =
+      this.workflowHistoryRedoDomains[
+        this.workflowHistoryRedoDomains.length - 1
+      ] ?? null;
+
+    if (pendingDomain === 'node' && this.canRedoNodeDraft()) {
+      this.workflowHistoryRedoDomains.pop();
+      this.redoNodeDraft();
+      return;
+    }
+
+    if (pendingDomain === 'graph' && this.canRedoWorkflowGraph()) {
+      void this.redoWorkflowGraph(true);
+      return;
+    }
+
+    if (pendingDomain) {
+      this.workflowHistoryRedoDomains.pop();
+    }
+
+    if (this.canRedoNodeDraft()) {
+      this.redoNodeDraft();
+      return;
+    }
+
+    if (this.canRedoWorkflowGraph()) {
+      void this.redoWorkflowGraph(false);
+    }
+  }
+
+  cancelPendingNodeAutosave(): void {
+    if (this.nodeEditorAutosaveTimer !== null) {
+      clearTimeout(this.nodeEditorAutosaveTimer);
+      this.nodeEditorAutosaveTimer = null;
+    }
+  }
+
+  clearStoredNodeEditorDraft(
+    nodeId: string,
+    workflowIdOverride?: string | null,
+  ): void {
+    const workflowId = String(
+      workflowIdOverride ?? this.activeWorkflowId ?? '',
+    ).trim();
+    const normalizedNodeId = String(nodeId ?? '').trim();
+    if (!workflowId || !normalizedNodeId) {
+      return;
+    }
+
+    const draftKey = this.buildNodeEditorDraftIdentity(workflowId, normalizedNodeId);
+    this.dirtyNodeEditorDraftKeys.delete(draftKey);
+
+    try {
+      localStorage.removeItem(
+        this.buildNodeEditorDraftStorageKey(workflowId, normalizedNodeId),
+      );
+    } catch {
+      // Ignore storage cleanup failures and keep editor state in memory.
+    }
+  }
+
+  captureCurrentNodeDraftAsServerBaseline(): void {
+    const snapshot = this.buildCurrentNodeEditorDraftSnapshot();
+    if (!snapshot) {
+      return;
+    }
+
+    this.syncedNodeEditorDraftSignatures.set(
+      this.buildNodeEditorDraftIdentity(snapshot.workflowId, snapshot.nodeId),
+      this.serializeNodeEditorDraftSnapshot(snapshot),
+    );
+    this.seedNodeEditorHistory(snapshot);
+  }
+
+  tryApplyStoredNodeEditorDraft(node: NodeSingular): boolean {
+    const workflowId = String(this.activeWorkflowId ?? '').trim();
+    const nodeId = node.id().trim();
+    if (!workflowId || !nodeId) {
+      return false;
+    }
+
+    const storedDraft = this.readStoredNodeEditorDraft(nodeId, workflowId);
+    if (!storedDraft?.snapshot) {
+      return false;
+    }
+
+    const snapshot = storedDraft.snapshot;
+    if (snapshot.editNodeType !== this.editNodeType) {
+      this.clearStoredNodeEditorDraft(nodeId, workflowId);
+      return false;
+    }
+
+    const draftKey = this.buildNodeEditorDraftIdentity(workflowId, nodeId);
+    const storedSignature = this.serializeNodeEditorDraftSnapshot(snapshot);
+    if (storedSignature === (this.syncedNodeEditorDraftSignatures.get(draftKey) ?? '')) {
+      this.clearStoredNodeEditorDraft(nodeId, workflowId);
+      return false;
+    }
+
+    this.applyNodeEditorDraftSnapshot(snapshot);
+    return true;
+  }
+
+  finalizeRestoredNodeEditorDraft(): void {
+    const snapshot = this.buildCurrentNodeEditorDraftSnapshot();
+    if (!snapshot) {
+      return;
+    }
+
+    const draftKey = this.buildNodeEditorDraftIdentity(
+      snapshot.workflowId,
+      snapshot.nodeId,
+    );
+    const signature = this.serializeNodeEditorDraftSnapshot(snapshot);
+    this.lastObservedNodeEditorDraftSignature = signature;
+    this.persistStoredNodeEditorDraft(snapshot);
+    this.dirtyNodeEditorDraftKeys.add(draftKey);
+    this.recordNodeEditorHistorySnapshot(snapshot, { forcePush: true });
+
+    if (this.canAutosaveCurrentNodeDraft()) {
+      this.nodeDraftSyncState = 'dirty';
+      this.queueNodeAutosave();
+    } else {
+      this.cancelPendingNodeAutosave();
+      this.nodeDraftSyncState = 'local';
+    }
+  }
+
+  markCurrentNodeEditorAsClean(): void {
+    const snapshot = this.buildCurrentNodeEditorDraftSnapshot();
+    if (!snapshot) {
+      this.lastObservedNodeEditorDraftSignature = '';
+      this.nodeDraftSyncState = 'idle';
+      return;
+    }
+
+    const signature = this.serializeNodeEditorDraftSnapshot(snapshot);
+    this.syncedNodeEditorDraftSignatures.set(
+      this.buildNodeEditorDraftIdentity(snapshot.workflowId, snapshot.nodeId),
+      signature,
+    );
+    this.lastObservedNodeEditorDraftSignature = signature;
+    this.seedNodeEditorHistory(snapshot);
+    this.clearStoredNodeEditorDraft(snapshot.nodeId, snapshot.workflowId);
+    this.nodeDraftSyncState = 'idle';
   }
 
   pruneUnavailableVariableTokensInDraft(): void {
@@ -1041,6 +1487,1205 @@ export class WorkflowEditorPage
       );
       rule.value = matchedOption ?? options[0] ?? '';
     }
+  }
+
+  private queueNodeEditorDraftTrackingPass(): void {
+    if (this.nodeEditorDraftTrackingQueued) {
+      return;
+    }
+
+    this.nodeEditorDraftTrackingQueued = true;
+    queueMicrotask(() => {
+      this.nodeEditorDraftTrackingQueued = false;
+      this.processNodeEditorDraftTracking();
+    });
+  }
+
+  private processNodeEditorDraftTracking(): void {
+    if (this.isApplyingStoredNodeEditorDraft || this.isApplyingNodeDraftHistory) {
+      return;
+    }
+
+    const snapshot = this.buildCurrentNodeEditorDraftSnapshot();
+    if (!snapshot) {
+      this.lastObservedNodeEditorDraftSignature = '';
+      if (!this.isAutosavingNode && this.nodeEditorAutosaveTimer === null) {
+        const nextState: NodeDraftSyncState = this.hasLocalNodeDrafts()
+          ? 'local'
+          : 'idle';
+        if (this.nodeDraftSyncState !== nextState) {
+          this.nodeDraftSyncState = nextState;
+          this.requestUiRefresh();
+        }
+      }
+      return;
+    }
+
+    const signature = this.serializeNodeEditorDraftSnapshot(snapshot);
+    if (signature === this.lastObservedNodeEditorDraftSignature) {
+      return;
+    }
+
+    this.lastObservedNodeEditorDraftSignature = signature;
+    this.handleNodeEditorDraftMutation(snapshot, signature);
+  }
+
+  private handleNodeEditorDraftMutation(
+    snapshot: WorkflowNodeEditorDraftSnapshot,
+    signature: string,
+  ): void {
+    const draftKey = this.buildNodeEditorDraftIdentity(
+      snapshot.workflowId,
+      snapshot.nodeId,
+    );
+    const syncedSignature =
+      this.syncedNodeEditorDraftSignatures.get(draftKey) ?? '';
+
+    if (signature === syncedSignature) {
+      this.recordNodeEditorHistorySnapshot(snapshot);
+      this.clearStoredNodeEditorDraft(snapshot.nodeId, snapshot.workflowId);
+      this.nodeDraftSyncState = 'idle';
+      this.requestUiRefresh();
+      return;
+    }
+
+    this.recordNodeEditorHistorySnapshot(snapshot);
+    this.persistStoredNodeEditorDraft(snapshot);
+    if (this.canAutosaveCurrentNodeDraft()) {
+      this.nodeDraftSyncState = 'dirty';
+      this.queueNodeAutosave();
+      this.requestUiRefresh();
+      return;
+    }
+
+    this.cancelPendingNodeAutosave();
+    this.nodeDraftSyncState = 'local';
+    this.requestUiRefresh();
+  }
+
+  private getCurrentNodeEditorHistoryKey(): string | null {
+    const snapshot = this.buildCurrentNodeEditorDraftSnapshot();
+    if (!snapshot) {
+      return null;
+    }
+
+    return this.buildNodeEditorDraftIdentity(snapshot.workflowId, snapshot.nodeId);
+  }
+
+  private seedNodeEditorHistory(
+    snapshot: WorkflowNodeEditorDraftSnapshot,
+  ): void {
+    const draftKey = this.buildNodeEditorDraftIdentity(
+      snapshot.workflowId,
+      snapshot.nodeId,
+    );
+    this.nodeEditorUndoStacks.set(draftKey, [
+      this.cloneNodeEditorDraftSnapshot(snapshot),
+    ]);
+    this.nodeEditorRedoStacks.set(draftKey, []);
+    this.lastNodeEditorHistoryKey = draftKey;
+    this.lastNodeEditorHistoryRecordedAt = Date.now();
+  }
+
+  private recordNodeEditorHistorySnapshot(
+    snapshot: WorkflowNodeEditorDraftSnapshot,
+    options?: { forcePush?: boolean },
+  ): void {
+    const draftKey = this.buildNodeEditorDraftIdentity(
+      snapshot.workflowId,
+      snapshot.nodeId,
+    );
+    const nextSnapshot = this.cloneNodeEditorDraftSnapshot(snapshot);
+    const nextSignature = this.serializeNodeEditorDraftSnapshot(nextSnapshot);
+    const undoStack = this.nodeEditorUndoStacks.get(draftKey) ?? [];
+    const lastSnapshot = undoStack[undoStack.length - 1] ?? null;
+    const lastSignature = lastSnapshot
+      ? this.serializeNodeEditorDraftSnapshot(lastSnapshot)
+      : '';
+
+    if (!undoStack.length) {
+      this.nodeEditorUndoStacks.set(draftKey, [nextSnapshot]);
+      this.nodeEditorRedoStacks.set(draftKey, []);
+      this.lastNodeEditorHistoryKey = draftKey;
+      this.lastNodeEditorHistoryRecordedAt = Date.now();
+      this.clearWorkflowRedoDomains();
+      return;
+    }
+
+    if (nextSignature === lastSignature) {
+      return;
+    }
+
+    const now = Date.now();
+    const shouldMerge =
+      !options?.forcePush &&
+      this.lastNodeEditorHistoryKey === draftKey &&
+      now - this.lastNodeEditorHistoryRecordedAt <=
+        this.nodeEditorHistoryMergeWindowMs;
+
+    if (shouldMerge) {
+      undoStack[undoStack.length - 1] = nextSnapshot;
+    } else {
+      undoStack.push(nextSnapshot);
+      if (undoStack.length > 100) {
+        undoStack.splice(0, undoStack.length - 100);
+      }
+    }
+
+    this.nodeEditorUndoStacks.set(draftKey, undoStack);
+    this.nodeEditorRedoStacks.set(draftKey, []);
+    this.lastNodeEditorHistoryKey = draftKey;
+    this.lastNodeEditorHistoryRecordedAt = now;
+    this.clearWorkflowRedoDomains();
+  }
+
+  private applyNodeDraftHistorySnapshot(
+    snapshot: WorkflowNodeEditorDraftSnapshot,
+  ): void {
+    const nextSnapshot = this.cloneNodeEditorDraftSnapshot(snapshot);
+    const draftKey = this.buildNodeEditorDraftIdentity(
+      nextSnapshot.workflowId,
+      nextSnapshot.nodeId,
+    );
+    const signature = this.serializeNodeEditorDraftSnapshot(nextSnapshot);
+
+    this.cancelPendingNodeAutosave();
+    this.isApplyingNodeDraftHistory = true;
+    try {
+      this.applyNodeEditorDraftSnapshot(nextSnapshot);
+      this.lastObservedNodeEditorDraftSignature = signature;
+
+      if (signature === (this.syncedNodeEditorDraftSignatures.get(draftKey) ?? '')) {
+        this.clearStoredNodeEditorDraft(nextSnapshot.nodeId, nextSnapshot.workflowId);
+        this.nodeDraftSyncState = 'idle';
+      } else {
+        this.persistStoredNodeEditorDraft(nextSnapshot);
+        this.nodeDraftSyncState = this.canAutosaveCurrentNodeDraft()
+          ? 'dirty'
+          : 'local';
+      }
+    } finally {
+      this.isApplyingNodeDraftHistory = false;
+    }
+
+    if (this.nodeDraftSyncState === 'dirty') {
+      this.queueNodeAutosave();
+    }
+    this.requestUiRefresh();
+  }
+
+  private clearWorkflowRedoDomains(): void {
+    this.workflowHistoryRedoDomains.length = 0;
+  }
+
+  resetWorkflowGraphHistoryState(): void {
+    this.workflowGraphUndoStack.length = 0;
+    this.workflowGraphRedoStack.length = 0;
+    this.workflowGraphNodeHistoryIdByBackendId.clear();
+    this.workflowGraphNodeBackendIdByHistoryId.clear();
+    this.workflowGraphEdgeHistoryIdByBackendId.clear();
+    this.workflowGraphEdgeBackendIdByHistoryId.clear();
+    this.nodeDragStartPositions.clear();
+    this.graphHistoryIdentitySequence = 0;
+    this.clearWorkflowRedoDomains();
+  }
+
+  synchronizeWorkflowGraphHistoryIdentities(): void {
+    if (!this.cy) {
+      return;
+    }
+
+    this.workflowGraphNodeHistoryIdByBackendId.clear();
+    this.workflowGraphNodeBackendIdByHistoryId.clear();
+    this.workflowGraphEdgeHistoryIdByBackendId.clear();
+    this.workflowGraphEdgeBackendIdByHistoryId.clear();
+
+    for (const node of this.cy.nodes().toArray()) {
+      const nodeElement = node as NodeSingular;
+      if (this.isAdderNode(nodeElement)) {
+        continue;
+      }
+
+      const backendId = nodeElement.id().trim();
+      if (!backendId) {
+        continue;
+      }
+
+      const historyId = this.ensureWorkflowGraphNodeHistoryId(nodeElement);
+      this.registerWorkflowGraphNodeIdentity(backendId, historyId);
+    }
+
+    for (const edge of this.cy.edges().toArray()) {
+      const edgeElement = edge as EdgeSingular;
+      if (
+        edgeElement.id() === this.adderEdgeId ||
+        edgeElement.data('helper') === 'adder'
+      ) {
+        continue;
+      }
+
+      const backendId = edgeElement.id().trim();
+      if (!backendId) {
+        continue;
+      }
+
+      const historyId = this.ensureWorkflowGraphEdgeHistoryId(edgeElement);
+      this.registerWorkflowGraphEdgeIdentity(backendId, historyId);
+    }
+  }
+
+  rememberNodeDragStartPosition(node: NodeSingular): void {
+    if (this.isAdderNode(node)) {
+      return;
+    }
+
+    const position = node.position();
+    this.nodeDragStartPositions.set(node.id(), {
+      x: Math.round(position.x),
+      y: Math.round(position.y),
+    });
+  }
+
+  buildWorkflowGraphDeletionHistoryEntry(
+    selectedNodes: NodeSingular[],
+    selectedEdges: EdgeSingular[],
+  ): WorkflowGraphMutationHistoryEntry | null {
+    const nodes = selectedNodes
+      .map((node) => this.captureWorkflowGraphNodeSeed(node))
+      .filter((seed): seed is WorkflowGraphNodeHistorySeed => !!seed);
+
+    const edgeMap = new Map<string, WorkflowGraphEdgeHistorySeed>();
+    const collectEdge = (edge: EdgeSingular): void => {
+      const seed = this.captureWorkflowGraphEdgeSeed(edge);
+      if (!seed) {
+        return;
+      }
+      edgeMap.set(seed.historyId, seed);
+    };
+
+    for (const edge of selectedEdges) {
+      collectEdge(edge);
+    }
+
+    for (const node of selectedNodes) {
+      for (const edge of node.connectedEdges().toArray()) {
+        collectEdge(edge as EdgeSingular);
+      }
+    }
+
+    if (!nodes.length && !edgeMap.size) {
+      return null;
+    }
+
+    return {
+      kind: 'delete',
+      nodes,
+      edges: Array.from(edgeMap.values()),
+    };
+  }
+
+  recordWorkflowGraphCreatedNodes(nodeIds: string[]): void {
+    const nodeSeeds = nodeIds
+      .map((nodeId) => this.captureWorkflowGraphNodeSeedById(nodeId))
+      .filter((seed): seed is WorkflowGraphNodeHistorySeed => !!seed);
+    if (!nodeSeeds.length) {
+      return;
+    }
+
+    this.recordWorkflowGraphHistoryEntry({
+      kind: 'create',
+      nodes: nodeSeeds,
+      edges: [],
+    });
+  }
+
+  recordWorkflowGraphCreatedEdges(edgeIds: string[]): void {
+    const edgeSeeds = edgeIds
+      .map((edgeId) => this.captureWorkflowGraphEdgeSeedById(edgeId))
+      .filter((seed): seed is WorkflowGraphEdgeHistorySeed => !!seed);
+    if (!edgeSeeds.length) {
+      return;
+    }
+
+    this.recordWorkflowGraphHistoryEntry({
+      kind: 'create',
+      nodes: [],
+      edges: edgeSeeds,
+    });
+  }
+
+  recordWorkflowGraphDeletion(
+    entry: WorkflowGraphMutationHistoryEntry | null,
+  ): void {
+    if (!entry || entry.kind !== 'delete') {
+      return;
+    }
+
+    this.recordWorkflowGraphHistoryEntry(entry);
+  }
+
+  recordWorkflowGraphNodeMoved(
+    nodeId: string,
+    before: { x: number; y: number } | null,
+    after: { x: number; y: number },
+  ): void {
+    const node = this.getNodeById(nodeId);
+    if (!node || !before) {
+      return;
+    }
+
+    const normalizedAfter = {
+      x: Math.round(after.x),
+      y: Math.round(after.y),
+    };
+    if (
+      before.x === normalizedAfter.x &&
+      before.y === normalizedAfter.y
+    ) {
+      return;
+    }
+
+    const historyId = this.ensureWorkflowGraphNodeHistoryId(node);
+    this.recordWorkflowGraphHistoryEntry({
+      kind: 'move',
+      nodeHistoryId: historyId,
+      before: {
+        x: Math.round(before.x),
+        y: Math.round(before.y),
+      },
+      after: normalizedAfter,
+    });
+  }
+
+  consumeRememberedNodeDragStartPosition(
+    nodeId: string,
+  ): { x: number; y: number } | null {
+    const remembered = this.nodeDragStartPositions.get(nodeId) ?? null;
+    this.nodeDragStartPositions.delete(nodeId);
+    return remembered;
+  }
+
+  private recordWorkflowGraphHistoryEntry(
+    entry: WorkflowGraphMutationHistoryEntry,
+  ): void {
+    this.workflowGraphUndoStack.push(this.cloneWorkflowGraphMutationEntry(entry));
+    if (this.workflowGraphUndoStack.length > 100) {
+      this.workflowGraphUndoStack.splice(0, this.workflowGraphUndoStack.length - 100);
+    }
+    this.workflowGraphRedoStack.length = 0;
+    this.clearWorkflowRedoDomains();
+  }
+
+  private async undoWorkflowGraph(): Promise<void> {
+    const entry = this.workflowGraphUndoStack.pop();
+    if (!entry) {
+      return;
+    }
+
+    this.isSaving = true;
+    this.isApplyingWorkflowGraphHistory = true;
+    try {
+      if (entry.kind === 'create') {
+        await this.deleteWorkflowGraphSeeds(entry.nodes, entry.edges);
+      } else if (entry.kind === 'delete') {
+        await this.recreateWorkflowGraphSeeds(entry.nodes, entry.edges);
+      } else {
+        await this.persistWorkflowGraphNodePosition(
+          entry.nodeHistoryId,
+          entry.before,
+        );
+      }
+
+      this.workflowGraphRedoStack.push(this.cloneWorkflowGraphMutationEntry(entry));
+      this.workflowHistoryRedoDomains.push('graph');
+      this.statusMessage = 'Operacion del workflow deshecha.';
+    } catch {
+      this.workflowGraphUndoStack.push(entry);
+      this.statusMessage = 'No se pudo deshacer la ultima operacion del workflow.';
+    } finally {
+      this.isSaving = false;
+      this.isApplyingWorkflowGraphHistory = false;
+      this.syncTriggerPresence();
+      this.removeAdderHelper();
+      this.requestUiRefresh();
+    }
+  }
+
+  private async redoWorkflowGraph(consumeDomain: boolean): Promise<void> {
+    const entry = this.workflowGraphRedoStack.pop();
+    if (!entry) {
+      return;
+    }
+
+    this.isSaving = true;
+    this.isApplyingWorkflowGraphHistory = true;
+    try {
+      if (entry.kind === 'create') {
+        await this.recreateWorkflowGraphSeeds(entry.nodes, entry.edges);
+      } else if (entry.kind === 'delete') {
+        await this.deleteWorkflowGraphSeeds(entry.nodes, entry.edges);
+      } else {
+        await this.persistWorkflowGraphNodePosition(
+          entry.nodeHistoryId,
+          entry.after,
+        );
+      }
+
+      this.workflowGraphUndoStack.push(this.cloneWorkflowGraphMutationEntry(entry));
+      if (consumeDomain && this.workflowHistoryRedoDomains.length) {
+        this.workflowHistoryRedoDomains.pop();
+      }
+      this.statusMessage = 'Operacion del workflow rehecha.';
+    } catch {
+      this.workflowGraphRedoStack.push(entry);
+      this.statusMessage = 'No se pudo rehacer la operacion del workflow.';
+    } finally {
+      this.isSaving = false;
+      this.isApplyingWorkflowGraphHistory = false;
+      this.syncTriggerPresence();
+      this.removeAdderHelper();
+      this.requestUiRefresh();
+    }
+  }
+
+  private async recreateWorkflowGraphSeeds(
+    nodeSeeds: WorkflowGraphNodeHistorySeed[],
+    edgeSeeds: WorkflowGraphEdgeHistorySeed[],
+  ): Promise<void> {
+    for (const seed of nodeSeeds) {
+      await this.recreateWorkflowGraphNode(seed);
+    }
+
+    for (const seed of edgeSeeds) {
+      await this.recreateWorkflowGraphEdge(seed);
+    }
+  }
+
+  private async deleteWorkflowGraphSeeds(
+    nodeSeeds: WorkflowGraphNodeHistorySeed[],
+    edgeSeeds: WorkflowGraphEdgeHistorySeed[],
+  ): Promise<void> {
+    const deletedEdgeHistoryIds = new Set<string>();
+    for (const seed of edgeSeeds) {
+      const backendId =
+        this.workflowGraphEdgeBackendIdByHistoryId.get(seed.historyId) ?? '';
+      if (!backendId || deletedEdgeHistoryIds.has(seed.historyId)) {
+        continue;
+      }
+
+      await firstValueFrom(this.workflowEdgeService.Delete(backendId));
+      this.removeWorkflowGraphEdgeLocally(backendId);
+      deletedEdgeHistoryIds.add(seed.historyId);
+    }
+
+    for (const seed of nodeSeeds) {
+      const backendId =
+        this.workflowGraphNodeBackendIdByHistoryId.get(seed.historyId) ?? '';
+      if (!backendId) {
+        continue;
+      }
+
+      const nodeElement = this.getNodeById(backendId);
+      const connectedEdgeIds = nodeElement
+        ? nodeElement.connectedEdges().toArray().map((edge) => edge.id())
+        : [];
+
+      await firstValueFrom(this.workflowNodeService.Delete(backendId));
+
+      if (this.editNodeId.trim() === backendId) {
+        this.closeRightMenu();
+      }
+
+      for (const edgeId of connectedEdgeIds) {
+        this.removeWorkflowGraphEdgeLocally(edgeId);
+      }
+
+      this.removeWorkflowGraphNodeLocally(backendId);
+    }
+  }
+
+  private async persistWorkflowGraphNodePosition(
+    nodeHistoryId: string,
+    position: { x: number; y: number },
+  ): Promise<void> {
+    const backendId =
+      this.workflowGraphNodeBackendIdByHistoryId.get(nodeHistoryId) ?? '';
+    if (!backendId) {
+      return;
+    }
+
+    await firstValueFrom(
+      this.workflowNodeService.Patch(backendId, {
+        posX: Math.round(position.x),
+        posY: Math.round(position.y),
+      }),
+    );
+
+    const node = this.getNodeById(backendId);
+    node?.position({
+      x: Math.round(position.x),
+      y: Math.round(position.y),
+    });
+  }
+
+  private async recreateWorkflowGraphNode(
+    seed: WorkflowGraphNodeHistorySeed,
+  ): Promise<void> {
+    if (!this.activeWorkflowId) {
+      return;
+    }
+
+    const createdNode = (await firstValueFrom(
+      this.workflowNodeService.Post({
+        workflow: { id: this.activeWorkflowId },
+        config: seed.config,
+        posX: Math.round(seed.posX),
+        posY: Math.round(seed.posY),
+        label: seed.label,
+        type: seed.type,
+      }),
+    )) as WorkflowNodeModel;
+
+    addNodeToGraph(this.cy, createdNode);
+    this.registerWorkflowGraphNodeIdentity(createdNode.id, seed.historyId);
+  }
+
+  private async recreateWorkflowGraphEdge(
+    seed: WorkflowGraphEdgeHistorySeed,
+  ): Promise<void> {
+    if (!this.activeWorkflowId) {
+      return;
+    }
+
+    const sourceBackendId =
+      this.workflowGraphNodeBackendIdByHistoryId.get(seed.sourceHistoryId) ?? '';
+    const targetBackendId =
+      this.workflowGraphNodeBackendIdByHistoryId.get(seed.targetHistoryId) ?? '';
+    if (!sourceBackendId || !targetBackendId) {
+      return;
+    }
+
+    const payload: Record<string, unknown> = {
+      workflow: { id: this.activeWorkflowId },
+      fromNode: { id: sourceBackendId },
+      toNode: { id: targetBackendId },
+    };
+    if (seed.routeKey) {
+      payload['routeKey'] = seed.routeKey;
+    }
+
+    const createdEdge = (await firstValueFrom(
+      this.workflowEdgeService.Post(payload),
+    )) as WorkflowEdgeModel;
+    const sourceNode = this.getNodeById(sourceBackendId);
+    addEdgeToGraph(
+      this.cy,
+      createdEdge,
+      this.resolveNodeKind(sourceNode),
+      sourceNode
+        ? {
+            type: String(sourceNode.data('type') ?? ''),
+            config: String(sourceNode.data('config') ?? ''),
+          }
+        : null,
+    );
+    this.registerWorkflowGraphEdgeIdentity(createdEdge.id, seed.historyId);
+  }
+
+  private captureWorkflowGraphNodeSeedById(
+    nodeId: string,
+  ): WorkflowGraphNodeHistorySeed | null {
+    const node = this.getNodeById(nodeId);
+    if (!node) {
+      return null;
+    }
+
+    return this.captureWorkflowGraphNodeSeed(node);
+  }
+
+  private captureWorkflowGraphNodeSeed(
+    node: NodeSingular,
+  ): WorkflowGraphNodeHistorySeed | null {
+    if (this.isAdderNode(node)) {
+      return null;
+    }
+
+    const position = node.position();
+    return {
+      historyId: this.ensureWorkflowGraphNodeHistoryId(node),
+      label: String(node.data('label') ?? ''),
+      type: String(node.data('type') ?? ''),
+      config: String(node.data('config') ?? ''),
+      posX: Math.round(position.x),
+      posY: Math.round(position.y),
+    };
+  }
+
+  private captureWorkflowGraphEdgeSeedById(
+    edgeId: string,
+  ): WorkflowGraphEdgeHistorySeed | null {
+    if (!this.cy) {
+      return null;
+    }
+
+    const edgeElement = this.cy.getElementById(edgeId);
+    if (!edgeElement.length || !edgeElement[0].isEdge()) {
+      return null;
+    }
+
+    return this.captureWorkflowGraphEdgeSeed(edgeElement[0] as EdgeSingular);
+  }
+
+  private captureWorkflowGraphEdgeSeed(
+    edge: EdgeSingular,
+  ): WorkflowGraphEdgeHistorySeed | null {
+    if (
+      edge.id() === this.adderEdgeId ||
+      edge.data('helper') === 'adder'
+    ) {
+      return null;
+    }
+
+    const sourceBackendId = String(edge.data('source') ?? '').trim();
+    const targetBackendId = String(edge.data('target') ?? '').trim();
+    const sourceNode = sourceBackendId ? this.getNodeById(sourceBackendId) : null;
+    const targetNode = targetBackendId ? this.getNodeById(targetBackendId) : null;
+    if (!sourceNode || !targetNode) {
+      return null;
+    }
+
+    return {
+      historyId: this.ensureWorkflowGraphEdgeHistoryId(edge),
+      sourceHistoryId: this.ensureWorkflowGraphNodeHistoryId(sourceNode),
+      targetHistoryId: this.ensureWorkflowGraphNodeHistoryId(targetNode),
+      routeKey: this.normalizeWorkflowGraphRouteKey(edge.data('routeKey')),
+    };
+  }
+
+  private ensureWorkflowGraphNodeHistoryId(node: NodeSingular): string {
+    const existing = String(node.data('historyId') ?? '').trim();
+    if (existing) {
+      return existing;
+    }
+
+    const historyId = this.buildNextWorkflowGraphHistoryIdentity('node');
+    node.data('historyId', historyId);
+    return historyId;
+  }
+
+  private ensureWorkflowGraphEdgeHistoryId(edge: EdgeSingular): string {
+    const existing = String(edge.data('historyId') ?? '').trim();
+    if (existing) {
+      return existing;
+    }
+
+    const historyId = this.buildNextWorkflowGraphHistoryIdentity('edge');
+    edge.data('historyId', historyId);
+    return historyId;
+  }
+
+  private buildNextWorkflowGraphHistoryIdentity(
+    kind: 'node' | 'edge',
+  ): string {
+    this.graphHistoryIdentitySequence += 1;
+    return `${kind}-history-${this.graphHistoryIdentitySequence}`;
+  }
+
+  private registerWorkflowGraphNodeIdentity(
+    backendId: string,
+    historyId: string,
+  ): void {
+    const normalizedBackendId = String(backendId ?? '').trim();
+    const normalizedHistoryId = String(historyId ?? '').trim();
+    if (!normalizedBackendId || !normalizedHistoryId) {
+      return;
+    }
+
+    const previousBackendId =
+      this.workflowGraphNodeBackendIdByHistoryId.get(normalizedHistoryId) ?? '';
+    if (previousBackendId && previousBackendId !== normalizedBackendId) {
+      this.workflowGraphNodeHistoryIdByBackendId.delete(previousBackendId);
+    }
+
+    this.workflowGraphNodeHistoryIdByBackendId.set(
+      normalizedBackendId,
+      normalizedHistoryId,
+    );
+    this.workflowGraphNodeBackendIdByHistoryId.set(
+      normalizedHistoryId,
+      normalizedBackendId,
+    );
+    const node = this.getNodeById(normalizedBackendId);
+    node?.data('historyId', normalizedHistoryId);
+  }
+
+  private registerWorkflowGraphEdgeIdentity(
+    backendId: string,
+    historyId: string,
+  ): void {
+    const normalizedBackendId = String(backendId ?? '').trim();
+    const normalizedHistoryId = String(historyId ?? '').trim();
+    if (!normalizedBackendId || !normalizedHistoryId) {
+      return;
+    }
+
+    const previousBackendId =
+      this.workflowGraphEdgeBackendIdByHistoryId.get(normalizedHistoryId) ?? '';
+    if (previousBackendId && previousBackendId !== normalizedBackendId) {
+      this.workflowGraphEdgeHistoryIdByBackendId.delete(previousBackendId);
+    }
+
+    this.workflowGraphEdgeHistoryIdByBackendId.set(
+      normalizedBackendId,
+      normalizedHistoryId,
+    );
+    this.workflowGraphEdgeBackendIdByHistoryId.set(
+      normalizedHistoryId,
+      normalizedBackendId,
+    );
+    const edgeElement = this.cy?.getElementById(normalizedBackendId);
+    if (edgeElement?.length) {
+      edgeElement.data('historyId', normalizedHistoryId);
+    }
+  }
+
+  private removeWorkflowGraphNodeLocally(backendId: string): void {
+    const normalizedBackendId = String(backendId ?? '').trim();
+    if (!normalizedBackendId) {
+      return;
+    }
+
+    const nodeElement = this.getNodeById(normalizedBackendId);
+    const connectedEdgeIds = nodeElement
+      ? nodeElement.connectedEdges().toArray().map((edge) => edge.id())
+      : [];
+    for (const edgeId of connectedEdgeIds) {
+      this.removeWorkflowGraphEdgeLocally(edgeId);
+    }
+
+    const historyId =
+      this.workflowGraphNodeHistoryIdByBackendId.get(normalizedBackendId) ?? '';
+    if (historyId) {
+      this.workflowGraphNodeBackendIdByHistoryId.delete(historyId);
+    }
+    this.workflowGraphNodeHistoryIdByBackendId.delete(normalizedBackendId);
+    nodeElement?.remove();
+  }
+
+  private removeWorkflowGraphEdgeLocally(backendId: string): void {
+    const normalizedBackendId = String(backendId ?? '').trim();
+    if (!normalizedBackendId) {
+      return;
+    }
+
+    const historyId =
+      this.workflowGraphEdgeHistoryIdByBackendId.get(normalizedBackendId) ?? '';
+    if (historyId) {
+      this.workflowGraphEdgeBackendIdByHistoryId.delete(historyId);
+    }
+    this.workflowGraphEdgeHistoryIdByBackendId.delete(normalizedBackendId);
+    this.cy?.getElementById(normalizedBackendId).remove();
+  }
+
+  private normalizeWorkflowGraphRouteKey(routeKeyRaw: unknown): string | null {
+    const normalized = String(routeKeyRaw ?? '').trim();
+    return normalized || null;
+  }
+
+  private cloneWorkflowGraphMutationEntry(
+    entry: WorkflowGraphMutationHistoryEntry,
+  ): WorkflowGraphMutationHistoryEntry {
+    return JSON.parse(JSON.stringify(entry)) as WorkflowGraphMutationHistoryEntry;
+  }
+
+  private queueNodeAutosave(): void {
+    if (this.isAutosavingNode) {
+      this.nodeEditorAutosaveQueued = true;
+      return;
+    }
+
+    this.cancelPendingNodeAutosave();
+    this.nodeEditorAutosaveTimer = setTimeout(() => {
+      this.nodeEditorAutosaveTimer = null;
+      void this.flushNodeAutosave();
+    }, this.nodeEditorAutosaveDelayMs);
+  }
+
+  private async flushNodeAutosave(): Promise<void> {
+    this.cancelPendingNodeAutosave();
+    if (this.isSaving || this.isAutosavingNode) {
+      this.nodeEditorAutosaveQueued = true;
+      return;
+    }
+
+    if (typeof this.pruneUnavailableVariableTokensInDraft === 'function') {
+      this.pruneUnavailableVariableTokensInDraft();
+    }
+
+    const snapshot = this.buildCurrentNodeEditorDraftSnapshot();
+    if (!snapshot) {
+      return;
+    }
+
+    const draftKey = this.buildNodeEditorDraftIdentity(
+      snapshot.workflowId,
+      snapshot.nodeId,
+    );
+    const attemptSignature = this.serializeNodeEditorDraftSnapshot(snapshot);
+    this.lastObservedNodeEditorDraftSignature = attemptSignature;
+
+    if (
+      attemptSignature ===
+      (this.syncedNodeEditorDraftSignatures.get(draftKey) ?? '')
+    ) {
+      this.clearStoredNodeEditorDraft(snapshot.nodeId, snapshot.workflowId);
+      this.nodeDraftSyncState = 'saved';
+      this.requestUiRefresh();
+      return;
+    }
+
+    this.persistStoredNodeEditorDraft(snapshot);
+    if (!this.canAutosaveCurrentNodeDraft()) {
+      this.nodeDraftSyncState = 'local';
+      this.requestUiRefresh();
+      return;
+    }
+
+    this.isAutosavingNode = true;
+    this.nodeDraftSyncState = 'saving';
+    this.nodeEditorAutosaveQueued = false;
+    this.requestUiRefresh();
+
+    try {
+      const result = await this.autosaveSelectedNodeChanges();
+      if (result !== 'saved') {
+        this.nodeDraftSyncState =
+          result === 'error' ? 'error' : 'local';
+        return;
+      }
+
+      this.syncedNodeEditorDraftSignatures.set(draftKey, attemptSignature);
+
+      const latestSignature = this.getStoredOrCurrentNodeDraftSignature(
+        snapshot.workflowId,
+        snapshot.nodeId,
+      );
+      const isAttemptNodeStillOpen =
+        String(this.activeWorkflowId ?? '').trim() === snapshot.workflowId &&
+        this.editNodeId.trim() === snapshot.nodeId;
+
+      if (!latestSignature || latestSignature === attemptSignature) {
+        this.clearStoredNodeEditorDraft(snapshot.nodeId, snapshot.workflowId);
+        if (isAttemptNodeStillOpen) {
+          this.lastObservedNodeEditorDraftSignature = attemptSignature;
+        }
+        this.nodeDraftSyncState = 'saved';
+        return;
+      }
+
+      this.nodeDraftSyncState = isAttemptNodeStillOpen
+        ? this.canAutosaveCurrentNodeDraft()
+          ? 'dirty'
+          : 'local'
+        : 'local';
+      if (isAttemptNodeStillOpen) {
+        this.nodeEditorAutosaveQueued = true;
+      }
+    } finally {
+      this.isAutosavingNode = false;
+      this.requestUiRefresh();
+      if (this.nodeEditorAutosaveQueued) {
+        this.nodeEditorAutosaveQueued = false;
+        this.queueNodeAutosave();
+      }
+    }
+  }
+
+  private canAutosaveCurrentNodeDraft(): boolean {
+    if (
+      !this.editNodeId.trim() ||
+      this.rightMenuMode !== 'edit' ||
+      !this.editNodeLabel.trim() ||
+      this.isTestingHttpRequest
+    ) {
+      return false;
+    }
+
+    if (this.useRawConfigEditor) {
+      return this.isRawConfigAutosaveReady();
+    }
+
+    return this.composeNodeConfigToSave(false) !== null;
+  }
+
+  private isRawConfigAutosaveReady(): boolean {
+    const rawConfig = String(this.editNodeConfig ?? '').trim();
+    if (!rawConfig) {
+      return false;
+    }
+
+    try {
+      JSON.parse(rawConfig);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private buildCurrentNodeEditorDraftSnapshot(): WorkflowNodeEditorDraftSnapshot | null {
+    const workflowId = String(this.activeWorkflowId ?? '').trim();
+    const nodeId = this.editNodeId.trim();
+    if (!workflowId || !nodeId || this.rightMenuMode !== 'edit') {
+      return null;
+    }
+
+    return {
+      workflowId,
+      nodeId,
+      editNodeType: this.editNodeType,
+      editNodeLabel: this.editNodeLabel,
+      editNodeConfig: this.editNodeConfig,
+      useRawConfigEditor: this.useRawConfigEditor,
+      triggerOnCreated: this.triggerOnCreated,
+      triggerOnUpdated: this.triggerOnUpdated,
+      triggerOnDeleted: this.triggerOnDeleted,
+      triggerWebhookToken: this.triggerWebhookToken,
+      triggerWebhookResponse: this.triggerWebhookResponse,
+      triggerScheduleMode: this.triggerScheduleMode,
+      triggerScheduleEnabled: this.triggerScheduleEnabled,
+      triggerScheduleTimezone: this.triggerScheduleTimezone,
+      triggerScheduleOnceAt: this.triggerScheduleOnceAt,
+      triggerScheduleRecurringType: this.triggerScheduleRecurringType,
+      triggerScheduleMinute: this.triggerScheduleMinute,
+      triggerScheduleTime: this.triggerScheduleTime,
+      triggerScheduleWeekdays: Array.isArray(this.triggerScheduleWeekdays)
+        ? [...this.triggerScheduleWeekdays]
+        : [],
+      triggerScheduleDayOfMonth: this.triggerScheduleDayOfMonth,
+      conditionField: this.conditionField,
+      conditionOperator: this.conditionOperator,
+      conditionValue: this.conditionValue,
+      conditionTree: cloneConditionGroupDraft(this.conditionTree),
+      decisionIfLogicalOperator: this.decisionIfLogicalOperator,
+      decisionIfRules: this.cloneDecisionRules(this.decisionIfRules),
+      decisionSwitchCases: this.cloneDecisionRules(this.decisionSwitchCases),
+      actionAssignedUserId: this.actionAssignedUserId,
+      actionProjectName: this.actionProjectName,
+      actionProjectDescription: this.actionProjectDescription,
+      actionTaskName: this.actionTaskName,
+      actionTaskDescription: this.actionTaskDescription,
+      actionTaskEstado: this.actionTaskEstado,
+      actionUserFirstName: this.actionUserFirstName,
+      actionUserLastName: this.actionUserLastName,
+      actionUserEmail: this.actionUserEmail,
+      actionUserPassword: this.actionUserPassword,
+      actionUserRoleId: this.actionUserRoleId,
+      actionUserStatusId: this.actionUserStatusId,
+      actionFormFields: this.cloneJsonFields(this.actionFormFields),
+      actionFormMessageTemplate: this.actionFormMessageTemplate,
+      actionHttpUrl: this.actionHttpUrl,
+      actionHttpMethod: this.actionHttpMethod,
+      actionHttpHeaders: this.cloneHttpHeaders(this.actionHttpHeaders),
+      actionHttpBody: this.actionHttpBody,
+      actionHttpResponse: this.actionHttpResponse,
+      actionJavascriptInputs: this.cloneJavascriptInputRows(
+        this.actionJavascriptInputs,
+      ),
+      actionJavascriptCode: this.actionJavascriptCode,
+      actionJavascriptResultKey: this.actionJavascriptResultKey,
+      actionJavascriptResponse: this.actionJavascriptResponse,
+    };
+  }
+
+  private applyNodeEditorDraftSnapshot(
+    snapshot: WorkflowNodeEditorDraftSnapshot,
+  ): void {
+    this.isApplyingStoredNodeEditorDraft = true;
+    try {
+      this.editNodeId = snapshot.nodeId;
+      this.editNodeType = snapshot.editNodeType;
+      this.editNodeLabel = snapshot.editNodeLabel;
+      this.editNodeConfig = snapshot.editNodeConfig;
+      this.useRawConfigEditor = snapshot.useRawConfigEditor;
+      this.triggerOnCreated = snapshot.triggerOnCreated;
+      this.triggerOnUpdated = snapshot.triggerOnUpdated;
+      this.triggerOnDeleted = snapshot.triggerOnDeleted;
+      this.triggerWebhookToken = snapshot.triggerWebhookToken;
+      this.triggerWebhookResponse = snapshot.triggerWebhookResponse;
+      this.triggerScheduleMode = snapshot.triggerScheduleMode;
+      this.triggerScheduleEnabled = snapshot.triggerScheduleEnabled;
+      this.triggerScheduleTimezone = snapshot.triggerScheduleTimezone;
+      this.triggerScheduleOnceAt = snapshot.triggerScheduleOnceAt;
+      this.triggerScheduleRecurringType = snapshot.triggerScheduleRecurringType;
+      this.triggerScheduleMinute = snapshot.triggerScheduleMinute;
+      this.triggerScheduleTime = snapshot.triggerScheduleTime;
+      this.triggerScheduleWeekdays = Array.isArray(
+        snapshot.triggerScheduleWeekdays,
+      )
+        ? [...snapshot.triggerScheduleWeekdays]
+        : [];
+      this.triggerScheduleDayOfMonth = snapshot.triggerScheduleDayOfMonth;
+      this.conditionField = snapshot.conditionField;
+      this.conditionOperator = snapshot.conditionOperator;
+      this.conditionValue = snapshot.conditionValue;
+      this.conditionTree = cloneConditionGroupDraft(snapshot.conditionTree);
+      this.decisionIfLogicalOperator = snapshot.decisionIfLogicalOperator;
+      this.decisionIfRules = this.cloneDecisionRules(snapshot.decisionIfRules);
+      this.decisionSwitchCases = this.cloneDecisionRules(
+        snapshot.decisionSwitchCases,
+      );
+      this.actionAssignedUserId = snapshot.actionAssignedUserId;
+      this.actionProjectName = snapshot.actionProjectName;
+      this.actionProjectDescription = snapshot.actionProjectDescription;
+      this.actionTaskName = snapshot.actionTaskName;
+      this.actionTaskDescription = snapshot.actionTaskDescription;
+      this.actionTaskEstado = snapshot.actionTaskEstado;
+      this.actionUserFirstName = snapshot.actionUserFirstName;
+      this.actionUserLastName = snapshot.actionUserLastName;
+      this.actionUserEmail = snapshot.actionUserEmail;
+      this.actionUserPassword = snapshot.actionUserPassword;
+      this.actionUserRoleId = snapshot.actionUserRoleId;
+      this.actionUserStatusId = snapshot.actionUserStatusId;
+      this.actionFormFields = this.cloneJsonFields(snapshot.actionFormFields);
+      this.actionFormMessageTemplate = snapshot.actionFormMessageTemplate;
+      this.actionHttpUrl = snapshot.actionHttpUrl;
+      this.actionHttpMethod = snapshot.actionHttpMethod;
+      this.actionHttpHeaders = this.cloneHttpHeaders(snapshot.actionHttpHeaders);
+      this.actionHttpBody = snapshot.actionHttpBody;
+      this.actionHttpResponse = snapshot.actionHttpResponse;
+      this.actionJavascriptInputs = this.cloneJavascriptInputRows(
+        snapshot.actionJavascriptInputs,
+      );
+      this.actionJavascriptCode = snapshot.actionJavascriptCode;
+      this.actionJavascriptResultKey = snapshot.actionJavascriptResultKey;
+      this.actionJavascriptResponse = snapshot.actionJavascriptResponse;
+      this.closeVariablePickerDialog();
+      this.variablePickerFormFieldInstructionIndex = null;
+      this.decisionRuleOperandTarget = null;
+      this.decisionRuleFocusedOperandKey = '';
+      this.javascriptInputValueTargetId = null;
+      this.javascriptInputFocusedId = '';
+      this.clearHttpTestFeedback();
+
+      if (this.isConditionEditor()) {
+        this.normalizeConditionTreeDraft();
+      }
+      if (this.isJavascriptEditor() && !this.useRawConfigEditor) {
+        this.syncJavascriptManagedInputsIntoCode();
+        this.syncJavascriptMonacoEditorValue(true);
+      }
+    } finally {
+      this.isApplyingStoredNodeEditorDraft = false;
+    }
+  }
+
+  private persistStoredNodeEditorDraft(
+    snapshot: WorkflowNodeEditorDraftSnapshot,
+  ): void {
+    const draftKey = this.buildNodeEditorDraftIdentity(
+      snapshot.workflowId,
+      snapshot.nodeId,
+    );
+    const payload: StoredWorkflowNodeEditorDraft = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      snapshot,
+    };
+
+    this.dirtyNodeEditorDraftKeys.add(draftKey);
+    try {
+      localStorage.setItem(
+        this.buildNodeEditorDraftStorageKey(snapshot.workflowId, snapshot.nodeId),
+        JSON.stringify(payload),
+      );
+    } catch {
+      // Ignore storage write failures and keep the in-memory draft markers.
+    }
+  }
+
+  private readStoredNodeEditorDraft(
+    nodeId: string,
+    workflowIdOverride?: string | null,
+  ): StoredWorkflowNodeEditorDraft | null {
+    const workflowId = String(
+      workflowIdOverride ?? this.activeWorkflowId ?? '',
+    ).trim();
+    const normalizedNodeId = String(nodeId ?? '').trim();
+    if (!workflowId || !normalizedNodeId) {
+      return null;
+    }
+
+    try {
+      const raw = localStorage.getItem(
+        this.buildNodeEditorDraftStorageKey(workflowId, normalizedNodeId),
+      );
+      if (!raw) {
+        return null;
+      }
+
+      const parsed = JSON.parse(raw) as Partial<StoredWorkflowNodeEditorDraft>;
+      if (parsed?.version !== 1 || !parsed.snapshot) {
+        return null;
+      }
+
+      if (
+        parsed.snapshot.workflowId !== workflowId ||
+        parsed.snapshot.nodeId !== normalizedNodeId
+      ) {
+        return null;
+      }
+
+      return parsed as StoredWorkflowNodeEditorDraft;
+    } catch {
+      return null;
+    }
+  }
+
+  private getStoredOrCurrentNodeDraftSignature(
+    workflowId: string,
+    nodeId: string,
+  ): string {
+    const currentSnapshot = this.buildCurrentNodeEditorDraftSnapshot();
+    if (
+      currentSnapshot &&
+      currentSnapshot.workflowId === workflowId &&
+      currentSnapshot.nodeId === nodeId
+    ) {
+      return this.serializeNodeEditorDraftSnapshot(currentSnapshot);
+    }
+
+    const storedDraft = this.readStoredNodeEditorDraft(nodeId, workflowId);
+    return storedDraft?.snapshot
+      ? this.serializeNodeEditorDraftSnapshot(storedDraft.snapshot)
+      : '';
+  }
+
+  private buildNodeEditorDraftIdentity(
+    workflowId: string,
+    nodeId: string,
+  ): string {
+    return `${workflowId}:${nodeId}`;
+  }
+
+  private buildNodeEditorDraftStorageKey(
+    workflowId: string,
+    nodeId: string,
+  ): string {
+    return `${this.nodeEditorDraftStoragePrefix}:${workflowId}:${nodeId}`;
+  }
+
+  private serializeNodeEditorDraftSnapshot(
+    snapshot: WorkflowNodeEditorDraftSnapshot,
+  ): string {
+    return JSON.stringify(snapshot);
+  }
+
+  private cloneNodeEditorDraftSnapshot(
+    snapshot: WorkflowNodeEditorDraftSnapshot,
+  ): WorkflowNodeEditorDraftSnapshot {
+    return JSON.parse(
+      JSON.stringify(snapshot),
+    ) as WorkflowNodeEditorDraftSnapshot;
   }
 
   onConditionRuleValuePathModelChange(rule: ConditionRuleDraft): void {
@@ -2803,6 +4448,7 @@ export class WorkflowEditorPage
 
     return (
       this.isSaving ||
+      this.isAutosavingNode ||
       this.isTestingHttpRequest ||
       !this.editNodeLabel.trim() ||
       this.isScheduleSaveBlocked() ||
@@ -2855,16 +4501,29 @@ export class WorkflowEditorPage
 
   ngAfterViewChecked(): void {
     this.syncJavascriptMonacoEditorLifecycle();
+    this.queueNodeEditorDraftTrackingPass();
   }
 
   ngOnDestroy(): void {
+    this.cancelPendingNodeAutosave();
     this.disposeJavascriptMonacoEditor();
     this.cy?.destroy();
     this.cy = undefined;
   }
+
+  @HostListener('window:beforeunload', ['$event'])
+  onWindowBeforeUnload(event: BeforeUnloadEvent): void {
+    if (!this.isAutosavingNode && this.nodeEditorAutosaveTimer === null) {
+      return;
+    }
+
+    event.preventDefault();
+    event.returnValue = '';
+  }
+
   @HostListener('window:keydown', ['$event'])
   onWindowKeyDown(event: KeyboardEvent): void {
-    if (!this.cy || this.isSaving) {
+    if (!this.cy || this.isSaving || this.isAutosavingNode) {
       return;
     }
 
@@ -2877,6 +4536,21 @@ export class WorkflowEditorPage
     const isCtrlOrMeta = event.ctrlKey || event.metaKey;
 
     if (isCtrlOrMeta && !isEditableTarget) {
+      const isUndoShortcut = key === 'z' && !event.shiftKey;
+      const isRedoShortcut = key === 'y' || (key === 'z' && event.shiftKey);
+
+      if (isUndoShortcut && this.canUndoHistory()) {
+        event.preventDefault();
+        this.undoHistory();
+        return;
+      }
+
+      if (isRedoShortcut && this.canRedoHistory()) {
+        event.preventDefault();
+        this.redoHistory();
+        return;
+      }
+
       if (key === 'c') {
         event.preventDefault();
         this.copySelectedNodes();

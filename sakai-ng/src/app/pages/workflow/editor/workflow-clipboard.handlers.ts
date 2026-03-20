@@ -66,6 +66,12 @@ export async function pasteCopiedNodesHandler(ctx: any): Promise<void> {
 
     const { createdNodeIds, skippedTriggers, nextPasteCount } = pasteResult;
     if (createdNodeIds.length) {
+      if (typeof ctx.synchronizeWorkflowGraphHistoryIdentities === 'function') {
+        ctx.synchronizeWorkflowGraphHistoryIdentities();
+      }
+      if (typeof ctx.recordWorkflowGraphCreatedNodes === 'function') {
+        ctx.recordWorkflowGraphCreatedNodes(createdNodeIds);
+      }
       ctx.copiedNodesPasteCount = nextPasteCount;
       const lastNodeId = createdNodeIds[createdNodeIds.length - 1];
       ctx.cy?.$(':selected').unselect();
@@ -100,6 +106,10 @@ export async function deleteSelectedElementsFromKeyboardHandler(
     return;
   }
 
+  const historyEntry =
+    typeof ctx.buildWorkflowGraphDeletionHistoryEntry === 'function'
+      ? ctx.buildWorkflowGraphDeletionHistoryEntry(selectedNodes, selectedEdges)
+      : null;
   ctx.isSaving = true;
   try {
     const { deletedNodeIds, deletedEdgeIds } = await deleteSelectedElements({
@@ -120,8 +130,14 @@ export async function deleteSelectedElementsFromKeyboardHandler(
       ctx.cy?.getElementById(nodeId).remove();
     }
 
+    if (typeof ctx.synchronizeWorkflowGraphHistoryIdentities === 'function') {
+      ctx.synchronizeWorkflowGraphHistoryIdentities();
+    }
     ctx.clearSelection();
     ctx.closeRightMenu();
+    if (typeof ctx.recordWorkflowGraphDeletion === 'function') {
+      ctx.recordWorkflowGraphDeletion(historyEntry);
+    }
 
     const deletedCount = deletedNodeIds.length + deletedEdgeIds.length;
     ctx.statusMessage =

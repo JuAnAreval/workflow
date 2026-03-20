@@ -34,6 +34,9 @@ export function registerCanvasEventsHandler(ctx: any): void {
         return;
       }
 
+      if (typeof ctx.rememberNodeDragStartPosition === 'function') {
+        ctx.rememberNodeDragStartPosition(node);
+      }
       ctx.removeAdderHelper();
       ctx.requestUiRefresh();
     },

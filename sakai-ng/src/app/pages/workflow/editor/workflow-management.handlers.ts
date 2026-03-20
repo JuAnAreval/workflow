@@ -160,6 +160,9 @@ export async function executeManualWorkflowHandler(ctx: any): Promise<void> {
 }
 
 export function closeRightMenuHandler(ctx: any): void {
+  if (typeof ctx.cancelPendingNodeAutosave === 'function') {
+    ctx.cancelPendingNodeAutosave();
+  }
   ctx.isRightMenuOpen = false;
   ctx.addSourceNodeIdForMenu = null;
   ctx.addSourceRouteKeyForMenu = null;

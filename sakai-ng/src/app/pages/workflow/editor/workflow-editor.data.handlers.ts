@@ -89,7 +89,13 @@ export async function loadGraphFromBackendHandler(ctx: any): Promise<void> {
     const edges = graph.edges;
 
     ctx.removeAdderHelper();
+    if (typeof ctx.resetWorkflowGraphHistoryState === 'function') {
+      ctx.resetWorkflowGraphHistoryState();
+    }
     paintWorkflowGraph(ctx.cy, nodes, edges);
+    if (typeof ctx.synchronizeWorkflowGraphHistoryIdentities === 'function') {
+      ctx.synchronizeWorkflowGraphHistoryIdentities();
+    }
     ctx.syncTriggerPresence();
     runWorkflowTopDownLayout({
       cy: ctx.cy,

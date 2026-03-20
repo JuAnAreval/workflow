@@ -572,9 +572,35 @@
 
 .menu-action-row {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 0.52rem;
+}
+
+.menu-draft-status {
+  flex: 1 1 12rem;
+  margin: 0;
+  color: #4e6a86;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.menu-draft-status.saving {
+  color: #946332;
+}
+
+.menu-draft-status.error {
+  color: #b05555;
+}
+
+.menu-draft-status.local {
+  color: #5d7692;
+}
+
+.menu-draft-status.saved {
+  color: #326f4f;
 }
 
 .http-test-feedback {

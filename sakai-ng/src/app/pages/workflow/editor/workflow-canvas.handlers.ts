@@ -50,9 +50,18 @@ export function handleCanvasNodeDragFreeHandler(
     return;
   }
 
+  const dragStartPosition =
+    typeof ctx.consumeRememberedNodeDragStartPosition === 'function'
+      ? ctx.consumeRememberedNodeDragStartPosition(node.id())
+      : null;
   persistNodePosition({
     node,
     patchNode: (id, payload) => ctx.workflowNodeService.Patch(id, payload),
+    onSuccess: () => {
+      if (typeof ctx.recordWorkflowGraphNodeMoved === 'function') {
+        ctx.recordWorkflowGraphNodeMoved(node.id(), dragStartPosition, node.position());
+      }
+    },
     onError: () => {
       ctx.statusMessage = 'No se pudo guardar la posicion del nodo.';
     },

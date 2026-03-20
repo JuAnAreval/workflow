@@ -10,8 +10,9 @@ export function persistNodePosition(input: {
     payload: { posX: number; posY: number },
   ) => Observable<unknown>;
   onError: () => void;
+  onSuccess?: () => void;
 }): void {
-  const { node, patchNode, onError } = input;
+  const { node, patchNode, onError, onSuccess } = input;
   const id = node.id();
   const position = node.position();
 
@@ -19,6 +20,9 @@ export function persistNodePosition(input: {
     posX: Math.round(position.x),
     posY: Math.round(position.y),
   }).subscribe({
+    next: () => {
+      onSuccess?.();
+    },
     error: onError,
   });
 }

@@ -195,6 +195,12 @@ export async function createNodeFromTemplateHandler(
     )) as WorkflowNodeModel;
 
     addNodeToGraph(ctx.cy, createdNode);
+    if (typeof ctx.synchronizeWorkflowGraphHistoryIdentities === 'function') {
+      ctx.synchronizeWorkflowGraphHistoryIdentities();
+    }
+    if (typeof ctx.recordWorkflowGraphCreatedNodes === 'function') {
+      ctx.recordWorkflowGraphCreatedNodes([createdNode.id]);
+    }
     ctx.syncTriggerPresence();
     ctx.statusMessage = `Nodo "${createdNode.label}" creado.`;
     return createdNode;

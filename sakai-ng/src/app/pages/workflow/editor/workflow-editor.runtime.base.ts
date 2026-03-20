@@ -29,6 +29,7 @@ import {
   runWorkflowTopDownLayout,
 } from './workflow-canvas.utils';
 import {
+  autosaveSelectedNodeChangesHandler,
   dismissHttpTestFeedbackHandler,
   getAssignableUserOptionLabelValue,
   getFormFieldVariableTokenPreviewHandler,
@@ -719,6 +720,12 @@ export class WorkflowEditorRuntimeBase {
     await saveSelectedNodeChangesHandler(this);
   }
 
+  protected async autosaveSelectedNodeChanges(): Promise<
+    'saved' | 'invalid' | 'not-found' | 'error'
+  > {
+    return autosaveSelectedNodeChangesHandler(this);
+  }
+
   async testHttpRequestAction(): Promise<void> {
     await testHttpRequestActionHandler(this);
   }
@@ -840,10 +847,16 @@ export class WorkflowEditorRuntimeBase {
   protected clearGraph(): void {
     this.s.removeAdderHelper();
     this.s.cy?.elements().remove();
+    if (typeof this.s.resetWorkflowGraphHistoryState === 'function') {
+      this.s.resetWorkflowGraphHistoryState();
+    }
     this.s.syncTriggerPresence();
   }
 
   protected clearSelection(): void {
+    if (typeof this.s.cancelPendingNodeAutosave === 'function') {
+      this.s.cancelPendingNodeAutosave();
+    }
     this.s.removeAdderHelper();
     this.s.cy?.$(':selected').unselect();
     this.s.addSourceNodeIdForMenu = null;

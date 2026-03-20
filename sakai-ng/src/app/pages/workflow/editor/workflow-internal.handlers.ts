@@ -124,6 +124,12 @@ export async function createEdgeBetweenNodesHandler(
           }
         : null,
     );
+    if (typeof ctx.synchronizeWorkflowGraphHistoryIdentities === 'function') {
+      ctx.synchronizeWorkflowGraphHistoryIdentities();
+    }
+    if (typeof ctx.recordWorkflowGraphCreatedEdges === 'function') {
+      ctx.recordWorkflowGraphCreatedEdges([createdEdge.id]);
+    }
     return true;
   } finally {
     ctx.isSaving = false;
@@ -224,6 +230,9 @@ export function openAddMenuFromAdderHandler(ctx: any): void {
   ctx.addSourceRouteKeyForMenu = adderContext.routeKey;
   ctx.showOnlyTriggerTemplatesInMenu = false;
   ctx.templateSearch = '';
+  if (typeof ctx.cancelPendingNodeAutosave === 'function') {
+    ctx.cancelPendingNodeAutosave();
+  }
   ctx.rightMenuMode = 'add';
   ctx.clearNodeEditorDraft();
   ctx.isRightMenuOpen = true;
@@ -235,12 +244,30 @@ export function openNodeEditorHandler(ctx: any, node: NodeSingular): void {
     return;
   }
 
+  if (typeof ctx.cancelPendingNodeAutosave === 'function') {
+    ctx.cancelPendingNodeAutosave();
+  }
+
   const state = buildNodeEditorOpenState(node);
   Object.assign(ctx, state);
   ctx.clearHttpTestFeedback();
   ctx.loadVisualDraftFromNodeConfig(ctx.editNodeType, ctx.editNodeConfig);
+  if (typeof ctx.captureCurrentNodeDraftAsServerBaseline === 'function') {
+    ctx.captureCurrentNodeDraftAsServerBaseline();
+  }
+  const restoredDraft =
+    typeof ctx.tryApplyStoredNodeEditorDraft === 'function'
+      ? !!ctx.tryApplyStoredNodeEditorDraft(node)
+      : false;
   if (typeof ctx.pruneUnavailableVariableTokensInDraft === 'function') {
     ctx.pruneUnavailableVariableTokensInDraft();
+  }
+  if (restoredDraft) {
+    if (typeof ctx.finalizeRestoredNodeEditorDraft === 'function') {
+      ctx.finalizeRestoredNodeEditorDraft();
+    }
+  } else if (typeof ctx.markCurrentNodeEditorAsClean === 'function') {
+    ctx.markCurrentNodeEditorAsClean();
   }
   ctx.requestUiRefresh();
 }

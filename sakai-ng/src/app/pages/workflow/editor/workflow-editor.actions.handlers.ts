@@ -1,4 +1,5 @@
-﻿import { firstValueFrom } from 'rxjs';
+import { firstValueFrom } from 'rxjs';
+import { NodeSingular } from 'cytoscape';
 import { AssignableUserModel } from '@/app/core/services/workflow/assignment/workflow-assignment.service';
 import {
   WorkflowHttpTestResponse,
@@ -18,6 +19,13 @@ import {
   readValueByVariableTargetFieldValue,
   writeValueByVariableTargetFieldHandler,
 } from './workflow-variable-picker.handlers';
+
+type ResolvedNodeSavePayload = {
+  nodeToEdit: NodeSingular;
+  nextLabel: string;
+  nextConfig: string;
+  nextType: string;
+};
 
 export function removeTokenByFieldHandler(
   ctx: any,
@@ -97,60 +105,135 @@ export function getFormVariableTokenPreviewsHandler(
   return tokens;
 }
 
-export async function saveSelectedNodeChangesHandler(ctx: any): Promise<void> {
+function resolveSelectedNodeSavePayload(
+  ctx: any,
+  showErrors: boolean,
+): ResolvedNodeSavePayload | null {
   const nodeId = ctx.editNodeId.trim();
   const nodeToEdit = nodeId ? ctx.getNodeById(nodeId) : null;
   if (!nodeToEdit) {
-    ctx.statusMessage = 'No hay nodo abierto para editar.';
-    return;
+    if (showErrors) {
+      ctx.statusMessage = 'No hay nodo abierto para editar.';
+    }
+    return null;
   }
 
   const nextLabel = ctx.editNodeLabel.trim();
   if (!nextLabel) {
-    ctx.statusMessage = 'El nombre del nodo no puede estar vacio.';
-    return;
+    if (showErrors) {
+      ctx.statusMessage = 'El nombre del nodo no puede estar vacio.';
+    }
+    return null;
   }
 
   if (typeof ctx.pruneUnavailableVariableTokensInDraft === 'function') {
     ctx.pruneUnavailableVariableTokensInDraft();
   }
 
-  const nextConfig = ctx.composeNodeConfigToSave();
+  const nextConfig = ctx.composeNodeConfigToSave(showErrors);
   if (nextConfig === null) {
+    return null;
+  }
+
+  return {
+    nodeToEdit,
+    nextLabel,
+    nextConfig,
+    nextType: ctx.resolveNodeTypeToSave(),
+  };
+}
+
+function applyPersistedNodeChanges(
+  ctx: any,
+  payload: ResolvedNodeSavePayload,
+  syncEditorState = true,
+): void {
+  payload.nodeToEdit.data({
+    ...payload.nodeToEdit.data(),
+    ...buildNodeVisualData(
+      payload.nextLabel,
+      payload.nextType,
+      payload.nextConfig,
+    ),
+  });
+  refreshOutgoingEdgeLabels(
+    ctx.cy,
+    payload.nodeToEdit.id(),
+    { type: payload.nextType, config: payload.nextConfig },
+  );
+
+  if (
+    syncEditorState &&
+    String(ctx.editNodeId ?? '').trim() === payload.nodeToEdit.id()
+  ) {
+    ctx.editNodeType = payload.nextType;
+    ctx.editNodeConfig = payload.nextConfig;
+    ctx.editNodeLabel = payload.nextLabel;
+  }
+}
+
+async function persistSelectedNodeChanges(
+  ctx: any,
+  payload: ResolvedNodeSavePayload,
+  syncEditorState = true,
+): Promise<void> {
+  await firstValueFrom(
+    ctx.workflowNodeService.Patch(payload.nodeToEdit.id(), {
+      label: payload.nextLabel,
+      config: payload.nextConfig,
+      type: payload.nextType,
+    }),
+  );
+
+  applyPersistedNodeChanges(ctx, payload, syncEditorState);
+}
+
+export async function saveSelectedNodeChangesHandler(ctx: any): Promise<void> {
+  const payload = resolveSelectedNodeSavePayload(ctx, true);
+  if (!payload) {
     return;
   }
 
-  const nextType = ctx.resolveNodeTypeToSave();
+  if (typeof ctx.cancelPendingNodeAutosave === 'function') {
+    ctx.cancelPendingNodeAutosave();
+  }
 
   ctx.isSaving = true;
   try {
-    await firstValueFrom(
-      ctx.workflowNodeService.Patch(nodeToEdit.id(), {
-        label: nextLabel,
-        config: nextConfig,
-        type: nextType,
-      }),
-    );
-
-    nodeToEdit.data({
-      ...nodeToEdit.data(),
-      ...buildNodeVisualData(nextLabel, nextType, nextConfig),
-    });
-    refreshOutgoingEdgeLabels(
-      ctx.cy,
-      nodeToEdit.id(),
-      { type: nextType, config: nextConfig },
-    );
-
-    ctx.editNodeType = nextType;
-    ctx.editNodeConfig = nextConfig;
-    ctx.openNodeEditor(nodeToEdit);
-    ctx.showAdderHelper(nodeToEdit);
-    ctx.statusMessage = `Nodo "${nextLabel}" actualizado.`;
+    await persistSelectedNodeChanges(ctx, payload, true);
+    if (typeof ctx.clearStoredNodeEditorDraft === 'function') {
+      ctx.clearStoredNodeEditorDraft(payload.nodeToEdit.id());
+    }
+    ctx.openNodeEditor(payload.nodeToEdit);
+    ctx.showAdderHelper(payload.nodeToEdit);
+    ctx.statusMessage = `Nodo "${payload.nextLabel}" actualizado.`;
   } catch {
     ctx.statusMessage = 'No se pudo actualizar el nodo.';
   } finally {
     ctx.isSaving = false;
+    ctx.requestUiRefresh();
+  }
+}
+
+export async function autosaveSelectedNodeChangesHandler(
+  ctx: any,
+): Promise<'saved' | 'invalid' | 'not-found' | 'error'> {
+  const nodeId = ctx.editNodeId.trim();
+  if (!nodeId) {
+    return 'not-found';
+  }
+
+  const payload = resolveSelectedNodeSavePayload(ctx, false);
+  if (!payload) {
+    return 'invalid';
+  }
+
+  try {
+    await persistSelectedNodeChanges(ctx, payload, false);
+    return 'saved';
+  } catch {
+    return 'error';
+  } finally {
     ctx.requestUiRefresh();
   }
 }
@@ -201,6 +284,9 @@ export function showAddMenuHandler(ctx: any): void {
   const selectedNodeType = String(selectedNode?.data('type') ?? '').trim();
   const isBranchingSource =
     selectedNodeType === 'decision_if' || selectedNodeType === 'decision_switch';
+  if (typeof ctx.cancelPendingNodeAutosave === 'function') {
+    ctx.cancelPendingNodeAutosave();
+  }
   ctx.showOnlyTriggerTemplatesInMenu = false;
   ctx.templateSearch = '';
   ctx.addSourceNodeIdForMenu = isBranchingSource ? null : selectedNode?.id() ?? null;
@@ -268,5 +354,3 @@ export function shouldShowTemplateInMenuHandler(
 
   return true;
 }
-
-
